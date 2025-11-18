@@ -42,7 +42,8 @@ actors.NewStateful("ticket", newState).
 ```
 
 - `actors.WithTimeout`, `actors.WithSignalTimeout`, and `actors.WithRetry` configure command-level
-  policies.
+  policies. Signal timeouts now translate into real deadlines: pending signals are dropped once the
+  timeout elapses, so use this to bound backlog growth and unblock stuck workflows.
 - `actors.WithCache(ttl)` enables a deterministic query cache for a specific handler.
 - Validators registered via `actors.WithValidator` run before the handler executes and can reject the
   payload deterministically.
@@ -78,6 +79,10 @@ actors.NewStateful("ticket", newState).
   waits synchronously for the typed result without creating a child workflow.
 - `actors.QueryActor` runs a read-only ask/reply protocol inside a single workflow task. Useful when
   you need to inspect another actor’s state without waiting for signals.
+
+Message metadata (available via `actors.Message(ctx)`) now enforces the optional `Deadline` and
+`RetryBudget` fields. When you set these from callers, each hop decrements the budget and refuses to
+process expired messages, making it easier to propagate TTLs and back-pressure across actors.
 
 ## Workflow utilities
 

@@ -81,6 +81,9 @@ type MessageMetadata struct {
 	Deadline time.Time
 	// RetryBudget expresses how many retries remain from the caller's perspective.
 	RetryBudget int
+	// RetryBudgetSet reports whether RetryBudget should be enforced. When false, the
+	// budget is treated as unlimited.
+	RetryBudgetSet bool
 	// Caller identifies who initiated the delivery if known.
 	Caller Ref
 }

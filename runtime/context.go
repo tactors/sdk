@@ -24,6 +24,11 @@ const (
 	queryCacheNilKey      = "__actors_query_nil_payload"
 )
 
+var (
+	errMessageDeadlineExceeded    = errors.New("actors: message deadline exceeded")
+	errMessageRetryBudgetExceeded = errors.New("actors: message retry budget exhausted")
+)
+
 type wfContext struct {
 	workflowCtx      workflow.Context
 	ref              actors.Ref
@@ -477,6 +482,7 @@ func (c *wfContext) askViaSignal(ref actors.Ref, payload any) (any, error) {
 	haveAskEvent = true
 	emitAskStart(c.workflowCtx, askEvent)
 	meta := c.newOutgoingMetadata("ask", id)
+	c.applySignalDeadline(desc, name, &meta)
 	req := askRequest{
 		ID:            id,
 		Command:       name,
@@ -847,8 +853,23 @@ func (c *wfContext) SendCommand(ref actors.Ref, payload any) error {
 		Payload:  payload,
 		Envelope: c.newOutgoingMetadata("tell"),
 	}
+	c.applySignalDeadline(desc, name, &req.Envelope)
 	fut := workflow.SignalExternalWorkflow(c.workflowCtx, ref.ID, "", tellRequestSignal, req)
 	return fut.Get(c.workflowCtx, nil)
+}
+
+func (c *wfContext) applySignalDeadline(desc *actors.Description, command string, meta *actors.MessageMetadata) {
+	if desc == nil || meta == nil {
+		return
+	}
+	timeout := desc.SignalTimeouts[command]
+	if timeout <= 0 {
+		return
+	}
+	deadline := workflow.Now(c.workflowCtx).Add(timeout)
+	if !meta.HasDeadline() || deadline.Before(meta.Deadline) {
+		meta.Deadline = deadline
+	}
 }
 
 func (c *wfContext) withWorkflowContext(ctx workflow.Context, fn func() (any, error)) (any, error) {
@@ -871,6 +892,9 @@ func (c *wfContext) withMessageMetadata(meta actors.MessageMetadata, fn func() (
 	prevMeta := c.messageMeta
 	prevCorr := c.correlation
 	meta = c.ensureMessageMetadata(meta)
+	if err := c.enforceMessageMetadata(&meta); err != nil {
+		return nil, err
+	}
 	c.messageMeta = meta
 	c.correlation = meta.Correlation
 	defer func() {
@@ -928,6 +952,25 @@ func (c *wfContext) normalizeCorrelation(meta actors.MessageMetadata) actors.Cor
 	return corr
 }
 
+func (c *wfContext) enforceMessageMetadata(meta *actors.MessageMetadata) error {
+	if meta == nil {
+		return nil
+	}
+	if meta.HasDeadline() {
+		now := workflow.Now(c.workflowCtx)
+		if !now.Before(meta.Deadline) {
+			return actors.NonRetryable(fmt.Errorf("%w: message %s", errMessageDeadlineExceeded, meta.ID))
+		}
+	}
+	if meta.RetryBudgetSet {
+		if meta.RetryBudget <= 0 {
+			return actors.NonRetryable(fmt.Errorf("%w: message %s", errMessageRetryBudgetExceeded, meta.ID))
+		}
+		meta.RetryBudget--
+	}
+	return nil
+}
+
 func (c *wfContext) newOutgoingMetadata(prefix string, overrideID ...string) actors.MessageMetadata {
 	c.callSeq++
 	id := fmt.Sprintf("%s-%s-%d", c.ref.ID, prefix, c.callSeq)
@@ -939,6 +982,13 @@ func (c *wfContext) newOutgoingMetadata(prefix string, overrideID ...string) act
 		CorrelationID: id,
 		Caller:        c.ref,
 		Correlation:   c.correlation.Clone(),
+	}
+	if !c.messageMeta.Deadline.IsZero() {
+		meta.Deadline = c.messageMeta.Deadline
+	}
+	if c.messageMeta.RetryBudgetSet {
+		meta.RetryBudgetSet = true
+		meta.RetryBudget = c.messageMeta.RetryBudget
 	}
 	if meta.Correlation.TraceID == "" {
 		if parent := c.messageMeta.Correlation.TraceID; parent != "" {
@@ -956,6 +1006,9 @@ func (c *wfContext) newOutgoingMetadata(prefix string, overrideID ...string) act
 	}
 	if meta.Correlation.SagaID == "" {
 		meta.Correlation.SagaID = c.correlation.SagaID
+	}
+	if meta.RetryBudget > 0 && !meta.RetryBudgetSet {
+		meta.RetryBudgetSet = true
 	}
 	if len(c.correlation.Attributes) > 0 {
 		if meta.Correlation.Attributes == nil {

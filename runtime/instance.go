@@ -262,6 +262,10 @@ func (i *temporalInstance) commandReceiveHandler(
 				logger.Info("business error", "command", name, "error", inner)
 				return
 			}
+			if errors.Is(err, errMessageDeadlineExceeded) || errors.Is(err, errMessageRetryBudgetExceeded) {
+				logger.Info("command discarded", "command", name, "error", err)
+				return
+			}
 			if actors.IsNonRetryable(err) {
 				logger.Warn("command non-retryable", "command", name, "error", err)
 				return
@@ -807,6 +811,10 @@ func (i *temporalInstance) handleTellRequest(ctx workflow.Context, wfCtx *wfCont
 	}
 	if inner, ok := actors.AsBusinessError(err); ok {
 		workflow.GetLogger(ctx).Info("tell command business error", "command", req.Command, "error", inner)
+		return
+	}
+	if errors.Is(err, errMessageDeadlineExceeded) || errors.Is(err, errMessageRetryBudgetExceeded) {
+		workflow.GetLogger(ctx).Info("tell command discarded", "command", req.Command, "error", err)
 		return
 	}
 	if errors.Is(err, actors.ErrStopLoop) {

@@ -2285,11 +2285,18 @@ func registerActorWorkflow(tb testing.TB, env *testsuite.TestWorkflowEnvironment
 }
 
 func mockExternalSignals(env *testsuite.TestWorkflowEnvironment) {
+	mockExternalSignalsWithCapture(env, nil)
+}
+
+func mockExternalSignalsWithCapture(env *testsuite.TestWorkflowEnvironment, capture func(string, any)) {
 	env.OnSignalExternalWorkflow(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
 			workflowID, _ := args.Get(1).(string)
 			signalName, _ := args.Get(3).(string)
 			payload := args.Get(4)
+			if capture != nil {
+				capture(signalName, payload)
+			}
 			env.SignalWorkflow(signalName, payload)
 			_ = workflowID
 		}).Return(nil).Maybe()
@@ -2367,6 +2374,114 @@ func TestSearchAttributeHelpers(t *testing.T) {
 	if len(state.Errors) == 0 || state.Errors[0] != "unsupported attribute type" {
 		t.Fatalf("expected invalid attribute error, got %#v", state.Errors)
 	}
+}
+
+func TestTellRequestDeadlineDrop(t *testing.T) {
+	suite := testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	runner := registerActorWorkflow(t, env, newMetadataActor())
+	mockExternalSignals(env)
+	recordName := actors.TypeKeyOf(metadataRecordCommand{})
+	queryName := actors.TypeKeyOf(metadataQuery{})
+	stopSignal := actors.TypeKeyOf(stopLoopCommand{})
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(tellRequestSignal, tellRequest{
+			Command: recordName,
+			Payload: metadataRecordCommand{Value: "expired"},
+			Envelope: actors.MessageMetadata{
+				Deadline: time.Unix(0, 0),
+			},
+		})
+	}, time.Millisecond)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(tellRequestSignal, tellRequest{
+			Command: recordName,
+			Payload: metadataRecordCommand{Value: "fresh"},
+			Envelope: actors.MessageMetadata{
+				Deadline: time.Unix(1<<60, 0),
+			},
+		})
+	}, 2*time.Millisecond)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(stopSignal, stopLoopCommand{})
+	}, 20*time.Millisecond)
+	env.ExecuteWorkflow(runner.Workflow(), "metadata-deadline", struct{}{})
+	require.NoError(t, env.GetWorkflowError())
+	payload, err := codec.Marshal(metadataQuery{})
+	require.NoError(t, err)
+	value, err := env.QueryWorkflow(queryName, payload)
+	require.NoError(t, err)
+	var state metadataState
+	require.NoError(t, value.Get(&state))
+	require.Equal(t, []string{"fresh"}, state.Values)
+}
+
+func TestTellRequestRetryBudgetDrop(t *testing.T) {
+	suite := testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	runner := registerActorWorkflow(t, env, newMetadataActor())
+	mockExternalSignals(env)
+	recordName := actors.TypeKeyOf(metadataRecordCommand{})
+	queryName := actors.TypeKeyOf(metadataQuery{})
+	stopSignal := actors.TypeKeyOf(stopLoopCommand{})
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(tellRequestSignal, tellRequest{
+			Command: recordName,
+			Payload: metadataRecordCommand{Value: "denied"},
+			Envelope: actors.MessageMetadata{
+				RetryBudget:    0,
+				RetryBudgetSet: true,
+			},
+		})
+	}, time.Millisecond)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(tellRequestSignal, tellRequest{
+			Command: recordName,
+			Payload: metadataRecordCommand{Value: "allowed"},
+			Envelope: actors.MessageMetadata{
+				RetryBudget:    1,
+				RetryBudgetSet: true,
+			},
+		})
+	}, 2*time.Millisecond)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(stopSignal, stopLoopCommand{})
+	}, 20*time.Millisecond)
+	env.ExecuteWorkflow(runner.Workflow(), "metadata-budget", struct{}{})
+	require.NoError(t, env.GetWorkflowError())
+	payload, err := codec.Marshal(metadataQuery{})
+	require.NoError(t, err)
+	value, err := env.QueryWorkflow(queryName, payload)
+	require.NoError(t, err)
+	var state metadataState
+	require.NoError(t, value.Get(&state))
+	require.Equal(t, []string{"allowed"}, state.Values)
+}
+
+func TestSignalTimeoutSetsDeadline(t *testing.T) {
+	suite := testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	runner := registerActorWorkflow(t, env, newSignalTimeoutActor(5*time.Second))
+	var captured []tellRequest
+	mockExternalSignalsWithCapture(env, func(signal string, payload any) {
+		if signal == tellRequestSignal {
+			if req, ok := payload.(tellRequest); ok {
+				captured = append(captured, req)
+			}
+		}
+	})
+	sendSignal := actors.TypeKeyOf(timeoutSendCommand{})
+	stopSignal := actors.TypeKeyOf(stopLoopCommand{})
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(sendSignal, timeoutSendCommand{})
+	}, time.Millisecond)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(stopSignal, stopLoopCommand{})
+	}, 20*time.Millisecond)
+	env.ExecuteWorkflow(runner.Workflow(), "signal-timeout", struct{}{})
+	require.NoError(t, env.GetWorkflowError())
+	require.NotEmpty(t, captured, "expected tell request captured")
+	require.False(t, captured[0].Envelope.Deadline.IsZero(), "deadline should be populated from signal timeout")
 }
 
 func TestObservabilityHooks(t *testing.T) {
@@ -2492,6 +2607,56 @@ func newObservabilityActor() actors.Actor {
 			stopCommandAction[observabilityState](),
 		).
 		Build()
+}
+
+type metadataState struct {
+	Values []string
+}
+
+type metadataRecordCommand struct {
+	actors.CommandMsg[struct{}]
+	Value string
+}
+
+type metadataQuery struct{}
+
+func newMetadataActor() actors.Actor {
+	return actors.NewStateful("metadata", func() metadataState { return metadataState{} }).
+		With(
+			actors.Command(func(ctx actors.Ctx, st *metadataState, cmd metadataRecordCommand) (struct{}, error) {
+				st.Values = append(st.Values, cmd.Value)
+				return struct{}{}, nil
+			}),
+			actors.Query(func(ctx actors.Ctx, st metadataState, _ metadataQuery) (metadataState, error) {
+				return st, nil
+			}),
+			stopCommandAction[metadataState](),
+		).
+		Build()
+}
+
+type timeoutState struct{}
+
+type timeoutSendCommand struct {
+	actors.CommandMsg[struct{}]
+}
+
+type timeoutRecordCommand struct {
+	actors.CommandMsg[struct{}]
+}
+
+func newSignalTimeoutActor(timeout time.Duration) actors.Actor {
+	builder := actors.NewStateful("signal-timeout", func() timeoutState { return timeoutState{} }).
+		WithSignalTimeout(actors.TypeKeyOf(timeoutRecordCommand{}), timeout)
+	return builder.With(
+		actors.Command(func(ctx actors.Ctx, st *timeoutState, _ timeoutSendCommand) (struct{}, error) {
+			return struct{}{}, actors.Tell(ctx, ctx.Self(), timeoutRecordCommand{})
+		}),
+		actors.Command(func(ctx actors.Ctx, st *timeoutState, _ timeoutRecordCommand) (struct{}, error) {
+			return struct{}{}, nil
+		}),
+		stopCommandAction[timeoutState](),
+	).Build()
 }
 
 func newActivityEdgeActor() actors.Actor {
