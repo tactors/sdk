@@ -10,7 +10,6 @@ import (
 	"github.com/tactors/sdk/actors"
 	"github.com/tactors/sdk/internal/codec"
 	"github.com/tactors/sdk/observability"
-	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/log"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
@@ -780,7 +779,7 @@ func (c *wfContext) SearchAttributes() map[string]any {
 	if len(fields) == 0 {
 		return nil
 	}
-	dc := converter.GetDefaultDataConverter()
+	dc := dataConverter()
 	out := make(map[string]any, len(fields))
 	for k, payload := range fields {
 		var value any
@@ -803,7 +802,7 @@ func (c *wfContext) Memo() map[string]any {
 	if info == nil || info.Memo == nil || info.Memo.Fields == nil {
 		return nil
 	}
-	dc := converter.GetDefaultDataConverter()
+	dc := dataConverter()
 	out := make(map[string]any, len(info.Memo.Fields))
 	for k, payload := range info.Memo.Fields {
 		var value any
@@ -1081,7 +1080,7 @@ func (c *wfContext) ensureEffectLedger() {
 		return
 	}
 	var memo effectMemo
-	if err := converter.GetDefaultDataConverter().FromPayload(payload, &memo); err != nil {
+	if err := dataConverter().FromPayload(payload, &memo); err != nil {
 		if logger := c.Logger(); logger != nil {
 			logger.Error("decode effects memo", "error", err)
 		}

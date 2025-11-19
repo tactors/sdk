@@ -6,7 +6,6 @@ import (
 
 	"github.com/tactors/sdk/actors"
 	"github.com/tactors/sdk/internal/codec"
-	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -139,7 +138,7 @@ func (i *temporalInstance) restoreSnapshot(ctx workflow.Context, state any) (sna
 	if !ok {
 		return record, nil
 	}
-	if err := converter.GetDefaultDataConverter().FromPayload(payload, &record); err != nil {
+	if err := dataConverter().FromPayload(payload, &record); err != nil {
 		return snapshotRecord{}, err
 	}
 	if len(record.State) > 0 && state != nil {

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/tactors/sdk/internal/codec"
 	commonpb "go.temporal.io/api/common/v1"
@@ -10,23 +11,42 @@ import (
 
 const metadataEncodingCBOR = "binary/cbor"
 
-var defaultDataConverter = converter.NewCompositeDataConverter(
-	converter.NewNilPayloadConverter(),
-	converter.NewByteSlicePayloadConverter(),
-	converter.NewProtoJSONPayloadConverter(),
-	converter.NewProtoPayloadConverter(),
-	cborPayloadConverter{},
+var (
+	baseDataConverter = converter.NewCompositeDataConverter(
+		converter.NewNilPayloadConverter(),
+		converter.NewByteSlicePayloadConverter(),
+		converter.NewProtoJSONPayloadConverter(),
+		converter.NewProtoPayloadConverter(),
+		cborPayloadConverter{},
+		converter.NewJSONPayloadConverter(),
+	)
+	dataConverterMu     sync.RWMutex
+	activeDataConverter = baseDataConverter
 )
 
 // dataConverter exposes the CBOR-backed Temporal data converter used by the runtime.
 func dataConverter() converter.DataConverter {
-	return defaultDataConverter
+	dataConverterMu.RLock()
+	defer dataConverterMu.RUnlock()
+	return activeDataConverter
 }
 
 // DataConverter exposes the runtime's CBOR-backed data converter so external clients
 // (e.g., HTTP gateways) can encode/decode payloads consistently with actors.
 func DataConverter() converter.DataConverter {
 	return dataConverter()
+}
+
+// ConfigurePayloadCodecs installs the provided payload codecs on top of the runtime's
+// data converter. Passing no codecs restores the plain CBOR converter.
+func ConfigurePayloadCodecs(codecs ...converter.PayloadCodec) {
+	dataConverterMu.Lock()
+	defer dataConverterMu.Unlock()
+	if len(codecs) == 0 {
+		activeDataConverter = baseDataConverter
+		return
+	}
+	activeDataConverter = converter.NewCodecDataConverter(baseDataConverter, codecs...)
 }
 
 type cborPayloadConverter struct{}

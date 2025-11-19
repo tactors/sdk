@@ -44,6 +44,31 @@ if err := set.StartAll(ctx); err != nil {
 <-ctx.Done()
 ```
 
+## Payload codecs and encryption
+
+- The runtime ships with a deterministic CBOR data converter. Call `runtime.DataConverter()` to
+  share the same converter with clients or gateways so payloads stay compatible across every entry
+  point.
+- Use `runtime.ConfigurePayloadCodecs(...)` to wrap that converter with Temporal payload codecs
+  (compression, encryption, etc.). Passing no codecs resets the runtime back to plain CBOR.
+- `runtime.NewEncryptionCodec(key)` returns an AES-GCM codec that encrypts every payload before it
+  is handed to Temporal. Histories, visibility records, and built-in logs store only ciphertext so
+  secrets never appear in plaintext outside the worker.
+- Remember to hand the configured converter to your clients as well:
+
+```go
+codec, err := runtime.NewEncryptionCodec([]byte(os.Getenv("ACTOR_PAYLOAD_KEY")))
+if err != nil { log.Fatal(err) }
+runtime.ConfigurePayloadCodecs(codec)
+
+cli, err := client.Dial(client.Options{
+    HostPort:      "temporal:7233",
+    DataConverter: runtime.DataConverter(),
+})
+if err != nil { log.Fatal(err) }
+set := runtime.NewWorkerSet(cli)
+```
+
 ## Workflow lifecycle
 
 1. **Start envelope.** Every workflow begins with a deterministic envelope that carries the parent
