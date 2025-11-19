@@ -19,6 +19,7 @@ import (
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/internalbindings"
 	"go.temporal.io/sdk/log"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 )
@@ -763,6 +764,19 @@ func TestTemporalAskCallerCancellation(t *testing.T) {
 	err := env.GetWorkflowError()
 	require.Error(t, err, "expected cancellation error")
 	require.Contains(t, err.Error(), "canceled", "expected cancellation, got %v", err)
+}
+
+func TestTemporalWorkflowCancellationStopsLoop(t *testing.T) {
+	suite := testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	runner := registerActorWorkflow(t, env, newGreetingActor())
+	env.RegisterDelayedCallback(func() {
+		env.CancelWorkflow()
+	}, time.Millisecond)
+	env.ExecuteWorkflow(runner.Workflow(), "cancel-idle", struct{}{})
+	err := env.GetWorkflowError()
+	require.Error(t, err, "expected cancellation error")
+	require.True(t, temporal.IsCanceledError(err), "expected cancellation, got %v", err)
 }
 
 func TestTemporalAskTimeoutOverride(t *testing.T) {

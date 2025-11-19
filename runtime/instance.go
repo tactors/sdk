@@ -204,6 +204,12 @@ func (i *temporalInstance) driveCommandLoop(ctx workflow.Context, wfCtx *wfConte
 		selector.AddReceive(ch, i.commandReceiveHandler(ctx, wfCtx, state, spec, name, logger, chans, &exitErr))
 	}
 	selector.AddReceive(continueCh, i.continueReceiveHandler(ctx, wfCtx, state, chans, &exitErr))
+	selector.AddReceive(ctx.Done(), func(workflow.ReceiveChannel, bool) {
+		if exitErr == nil {
+			exitErr = temporal.NewCanceledError("actors: workflow canceled")
+		}
+		wfCtx.requestStop()
+	})
 	for {
 		if wfCtx.stopRequested() {
 			return nil, nil
