@@ -281,3 +281,49 @@ func TestSnapshotConfig(t *testing.T) {
 		t.Fatalf("expected snapshot args function")
 	}
 }
+
+func TestCommandOptionsApplied(t *testing.T) {
+	type optCmd struct {
+		actors.CommandMsg[struct{}]
+		Value int
+	}
+	retry := actors.RetryPolicy{MaxAttempts: 3, InitialInterval: time.Second, BackoffCoefficient: 1.5}
+	actor := actors.NewStateful("opts", func() builderState { return builderState{} }).
+		With(
+			actors.Command(func(ctx actors.Ctx, st *builderState, msg optCmd) (struct{}, error) {
+				st.Value = fmt.Sprint(msg.Value)
+				return struct{}{}, nil
+			},
+				actors.WithTimeout(5*time.Second),
+				actors.WithRetry(retry),
+				actors.WithValidator(func(payload any) error {
+					cmd, _ := payload.(optCmd)
+					if cmd.Value == 0 {
+						return fmt.Errorf("missing value")
+					}
+					return nil
+				}),
+			),
+		).
+		Build()
+	name := actors.TypeKeyOf(optCmd{})
+	spec, ok := actor.Spec().Commands[name]
+	if !ok {
+		t.Fatalf("expected command registered with key %q", name)
+	}
+	if spec.Timeout != 5*time.Second {
+		t.Fatalf("timeout not applied: %v", spec.Timeout)
+	}
+	if spec.Retry != retry {
+		t.Fatalf("retry not applied: %+v", spec.Retry)
+	}
+	if spec.Validator == nil {
+		t.Fatalf("validator missing")
+	}
+	if err := spec.Validator(optCmd{}); err == nil {
+		t.Fatalf("expected validator to reject zero value")
+	}
+	if err := spec.Validator(optCmd{Value: 1}); err != nil {
+		t.Fatalf("validator rejected valid payload: %v", err)
+	}
+}

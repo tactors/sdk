@@ -16,6 +16,23 @@ import (
 	"go.temporal.io/sdk/temporal"
 )
 
+type staticEncodedValue struct {
+	has   bool
+	value string
+}
+
+func (v staticEncodedValue) HasValue() bool { return v.has }
+func (v staticEncodedValue) Get(ptr interface{}) error {
+	if !v.has {
+		return nil
+	}
+	if s, ok := ptr.(*string); ok {
+		*s = v.value
+		return nil
+	}
+	return errors.New("unexpected type")
+}
+
 func TestInvokeCommandSignalWithStart(t *testing.T) {
 	fake := &fakeTemporalClient{}
 	inv := &temporalClientInvoker{client: fake}
@@ -123,6 +140,41 @@ func TestHandleUpdateErrorNonRetryable(t *testing.T) {
 	require.Equal(t, baseErr, err)
 }
 
+func TestInvokeQueryDecodesResult(t *testing.T) {
+	fake := &fakeTemporalClient{
+		queryResp: staticEncodedValue{has: true, value: "ok"},
+	}
+	inv := &temporalClientInvoker{client: fake}
+	ref := actors.ARef("kind", "wf")
+	var out string
+	require.NoError(t, inv.InvokeQuery(context.Background(), ref, "status", nil, &out))
+	require.Equal(t, "ok", out)
+}
+
+func TestInvokeCommandFallsBackOnStaleRun(t *testing.T) {
+	fake := &fakeTemporalClient{signalErr: &serviceerror.NotFound{}}
+	inv := &temporalClientInvoker{client: fake}
+	ref := actors.ARef("kind", "wf")
+	// seed cache so initial SignalWorkflow path is exercised
+	inv.storeRunID("wf", "stale-run")
+	require.NoError(t, inv.InvokeCommand(context.Background(), ref, "do", "payload"))
+	require.Len(t, fake.signalCalls, 1, "initial signal attempted")
+	require.Len(t, fake.signalWithStartCalls, 1, "should fallback to SignalWithStart")
+	require.Equal(t, "run-wf", inv.cachedRunID("wf"))
+}
+
+func TestInvokeAskRetriesOnNotFound(t *testing.T) {
+	fake := &fakeTemporalClient{
+		updateErrs: []error{&serviceerror.NotFound{}},
+	}
+	inv := &temporalClientInvoker{client: fake}
+	ref := actors.ARef("kind", "wf")
+	var out string
+	require.NoError(t, inv.InvokeAsk(context.Background(), ref, "do", nil, &out, actors.AskOptions{}))
+	require.Equal(t, 2, len(fake.updateCalls), "should retry after start")
+	require.Equal(t, 1, fake.executeCount, "should start workflow on first failure")
+}
+
 func TestInvokeAskUsesCachedRunID(t *testing.T) {
 	fake := &fakeTemporalClient{}
 	inv := &temporalClientInvoker{client: fake}
@@ -144,6 +196,10 @@ type fakeTemporalClient struct {
 	signalWithStartRunID string
 	executeRunID         string
 	updateRunID          string
+	queryResp            converter.EncodedValue
+	queryErr             error
+	signalErr            error
+	updateErrs           []error
 }
 
 type signalCall struct {
@@ -169,7 +225,7 @@ func (f *fakeTemporalClient) SignalWorkflow(ctx context.Context, workflowID, run
 		signalName: signalName,
 		arg:        arg,
 	})
-	return nil
+	return f.signalErr
 }
 
 func (f *fakeTemporalClient) SignalWithStartWorkflow(ctx context.Context, workflowID, signalName string, arg interface{}, options client.StartWorkflowOptions, workflow interface{}, workflowArgs ...interface{}) (client.WorkflowRun, error) {
@@ -189,11 +245,19 @@ func (f *fakeTemporalClient) SignalWithStartWorkflow(ctx context.Context, workfl
 }
 
 func (f *fakeTemporalClient) QueryWorkflow(ctx context.Context, workflowID, runID, queryType string, args ...interface{}) (converter.EncodedValue, error) {
+	if f.queryResp != nil || f.queryErr != nil {
+		return f.queryResp, f.queryErr
+	}
 	return nil, nil
 }
 
 func (f *fakeTemporalClient) UpdateWorkflow(ctx context.Context, options client.UpdateWorkflowOptions) (client.WorkflowUpdateHandle, error) {
 	f.updateCalls = append(f.updateCalls, options)
+	if len(f.updateErrs) > 0 {
+		err := f.updateErrs[0]
+		f.updateErrs = f.updateErrs[1:]
+		return nil, err
+	}
 	runID := options.RunID
 	if runID == "" {
 		runID = f.updateRunID

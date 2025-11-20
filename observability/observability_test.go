@@ -98,3 +98,24 @@ func TestListenerHooks(t *testing.T) {
 		t.Fatalf("expected listener to reset to nil")
 	}
 }
+
+func TestAttributeHelpers(t *testing.T) {
+	attrs := []Attribute{
+		String("k", "v"),
+		Bool("flag", true),
+		Int("count", 3),
+		Duration("dur", time.Second),
+	}
+	if len(attrs) != 4 {
+		t.Fatalf("expected four attrs")
+	}
+	// Ensure ListenerAdapter no-ops are safe to call.
+	var adapter ListenerAdapter
+	adapter.CommandStart(context.Background(), CommandEvent{})
+	adapter.CommandFinish(context.Background(), CommandEvent{}, nil, time.Millisecond)
+	adapter.AskStart(context.Background(), AskEvent{})
+	adapter.AskFinish(context.Background(), AskEvent{}, nil, time.Millisecond)
+	adapter.QueryStart(context.Background(), QueryEvent{})
+	adapter.QueryFinish(context.Background(), QueryEvent{}, nil, time.Millisecond)
+	adapter.WorkerEvent(context.Background(), WorkerEvent{})
+}

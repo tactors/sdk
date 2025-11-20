@@ -68,6 +68,10 @@ actors.NewStateful("ticket", newState).
   Embed `actors.ActivityMsg[Resp]` in each request struct so the helper can infer the expected type.
 - `actors.BackgroundActivity` launches fire-and-forget work, logging failures without blocking the
   command loop.
+- Responsiveness trade-off: waiting on activities, sleeps, or cross-actor asks inside a handler
+  blocks the workflow’s signal loop—that’s allowed but serializes other signals/commands. When you
+  want the loop free, schedule work (`ctx.Activity`, `ctx.BackgroundActivity`, child workflows) and
+  return; expose progress via queries or callbacks when the work completes.
 
 ## Child workflows and cross-actor calls
 

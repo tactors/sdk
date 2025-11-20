@@ -57,6 +57,15 @@ func HelloActor() actors.Actor {
 Handlers receive real Go structs (not `interface{}` payloads), so requesting new behavior stays
 ergonomic and deterministic.
 
+### Handler responsiveness
+
+Temporal runs your command/query handler on the workflow goroutine. If you wait on an activity, sleep,
+or block on an ask/query inside the handler, the whole signal loop pauses—just like a long-running
+Akka receive. That’s allowed; it simply serializes other signals/commands until the handler returns.
+When you care about responsiveness, keep the handler short: mutate state, kick off
+activities/child workflows (`ctx.Activity`, `ctx.BackgroundActivity`, `ctx.SpawnChild`), and return.
+Use a query or callback signal/update to surface progress.
+
 ## 2. Exercise the actor inside the Temporal testsuite
 
 The testkit drives real workflows and activities inside Temporal’s deterministic testsuite (no
