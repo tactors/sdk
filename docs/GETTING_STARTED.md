@@ -1,20 +1,19 @@
-# Getting Started
+# Getting Started (Temporal Users)
 
-New to the SDK? This guide introduces the typed builder, shows how to exercise an actor inside the
-Temporal testsuite, and finishes with a Temporal worker.
+You already know Temporal workers, signals, and queries. This guide shows the minimal delta to use
+typed actors: define one actor, register it on a worker, and poke it via ask/query.
 
 ## Before you start
 
-- Go 1.23 or newer
-- (Optional) [`temporalio/cli`](https://github.com/temporalio/cli) if you want to inspect real
-  histories later—nothing here depends on it.
+- Go 1.23 or newer.
+- A running Temporal cluster or the testsuite (used by `go test`)—no external server needed for tests.
+- Optional: [`temporalio/cli`](https://github.com/temporalio/cli) to inspect histories or trigger
+  signals/queries manually.
 
-Clone the repo and open it in your editor of choice.
+## 1) Describe an actor
 
-## 1. Describe a typed actor
-
-Every actor starts with a state factory, typed command/query structs, and handlers registered via the
-fluent builder.
+State factory + typed commands/queries. Handlers look like your usual workflow funcs but receive
+typed payloads instead of untyped `any`.
 
 ```go
 package hello
@@ -59,18 +58,39 @@ ergonomic and deterministic.
 
 ### Handler responsiveness
 
-Temporal runs your command/query handler on the workflow goroutine. If you wait on an activity, sleep,
-or block on an ask/query inside the handler, the whole signal loop pauses—just like a long-running
-Akka receive. That’s allowed; it simply serializes other signals/commands until the handler returns.
-When you care about responsiveness, keep the handler short: mutate state, kick off
-activities/child workflows (`ctx.Activity`, `ctx.BackgroundActivity`, `ctx.SpawnChild`), and return.
-Use a query or callback signal/update to surface progress.
+Commands run on the workflow goroutine. If a handler blocks on activity/sleep/ask/query, the signal
+loop pauses; keep handlers short when you care about responsiveness (trigger work, return, expose
+progress via query or callback).
 
-## 2. Exercise the actor inside the Temporal testsuite
+## 2) Register a worker (minimal delta from Temporal)
 
-The testkit drives real workflows and activities inside Temporal’s deterministic testsuite (no
-external server required). Describe the input sequence through `WhenCommand`, jump time with
-`Advance`, and assert results in `Then`.
+Same `client.Dial`, plus `runtime.NewWorkerSet` and `Register` with your actor. Queues default to
+`<kind>-workflow` / `<kind>-activity`.
+
+```go
+c, err := client.Dial(client.Options{
+    // reuse your usual options; share DataConverter if other clients need it
+    DataConverter: runtime.DataConverter(),
+})
+if err != nil { log.Fatal(err) }
+set := runtime.NewWorkerSet(c, runtime.WorkerConfig{})
+if _, err := set.Register(HelloActor(), runtime.WorkerConfig{}); err != nil {
+    log.Fatal(err)
+}
+ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+defer stop()
+if err := set.StartAll(ctx); err != nil {
+    log.Fatal(err)
+}
+<-ctx.Done()
+```
+
+Callers can use `actors.InvokeAsk` / `actors.InvokeTell` with the same data converter, or just signal
+the workflow type `hello` using Temporal tooling.
+
+## 3) Try it via testsuite or CLI
+
+**Testsuite (no cluster needed):** drive real workflows/activities deterministically.
 
 ```go
 scenario := testkit.NewActorTemporalScenario(hello.HelloActor(), "hello-wf", struct{}{})
@@ -91,36 +111,17 @@ scenario.
 Each `WhenCommand` enqueues a deterministic signal, while the final `Then` block provides a typed
 Temporal client for queries and results.
 
-## 3. Register Temporal workers
-
-When you are ready to run the same actor on Temporal, wire it into a `WorkerSet`. Each actor kind
-automatically receives `<kind>-workflow` and `<kind>-activity` task queues unless you override them.
-
-```go
-c, err := client.Dial(client.Options{})
-if err != nil { log.Fatal(err) }
-set := runtime.NewWorkerSet(c, runtime.WorkerConfig{})
-if _, err := set.Register(hello.HelloActor(), runtime.WorkerConfig{}); err != nil {
-    log.Fatal(err)
-}
-ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-defer stop()
-if err := set.StartAll(ctx); err != nil {
-    log.Fatal(err)
-}
-<-ctx.Done()
-```
-
-`WorkerSet` coordinates both the workflow and activity workers, so handling shutdown simply means
-cancelling the context you pass to `StartAll`.
+**CLI (if you have a cluster):** start the worker above, then use `temporal workflow signal` /
+`temporal workflow query` against workflow type `hello` (or invoke `actors.InvokeAsk` in code).
 
 ## Where to go next
 
-- [`docs/ACTOR_BUILDER.md`](ACTOR_BUILDER.md) explores every builder knob, including activities,
-  snapshots, child workflows, and validation hooks.
-- [`docs/RUNTIME_TEMPORAL.md`](RUNTIME_TEMPORAL.md) explains worker registration, queue overrides,
-  ask/query plumbing, and Continue-As-New internals.
-- [`docs/EXAMPLES.md`](EXAMPLES.md) points to reference implementations under `examples/` that you
-  can run with `go test` or `go run`.
-- [`docs/OBSERVABILITY.md`](OBSERVABILITY.md) shows how to connect the observability hooks to
-  OpenTelemetry (or any other telemetry stack).
+- [`docs/TEMPORAL_MENTAL_MODEL.md`](TEMPORAL_MENTAL_MODEL.md) to map familiar Temporal concepts to
+  Tactors primitives.
+- [`docs/PORTING_TEMPORAL.md`](PORTING_TEMPORAL.md) for a migration checklist.
+- [`docs/ACTOR_BUILDER.md`](ACTOR_BUILDER.md) for the full builder surface (retries, timeouts,
+  cache, activities, child workflows).
+- [`docs/RUNTIME_TEMPORAL.md`](RUNTIME_TEMPORAL.md) for worker options, queue overrides, ask/query
+  plumbing, and Continue-As-New internals.
+- [`docs/EXAMPLES.md`](EXAMPLES.md) for runnable samples using the Temporal testsuite.
+- [`docs/OBSERVABILITY.md`](OBSERVABILITY.md) to bridge spans/metrics into your telemetry stack.

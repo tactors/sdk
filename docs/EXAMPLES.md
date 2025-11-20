@@ -1,24 +1,27 @@
 # Examples Overview
 
 Every sample under `examples/` is runnable via `go test`, which drives the Temporal testsuite
-scenario described alongside the actor. Use them as reference implementations while exploring the
-SDK.
+scenario described alongside the actor. Use them as Temporal task templates.
 
-| Path | What it teaches |
-|------|-----------------|
-| `examples/greeter` | Smallest possible actor: one command, one query, and a Temporal scenario. |
-| `examples/hello-system` | Simple key/value state, typed queries, and a lightweight HTTP-ish façade. |
-| `examples/orders` | Activities that return typed results, retries, and per-command timeout overrides. |
-| `examples/spawn` | Long-lived `actors.Spawn`, one-shot children (`actors.SpawnOneShot`), `Tell`, and `QueryActor`. |
-| `examples/telegram` | Multi-command workflow w/ ask/query across actors plus fire-and-forget activities. |
-| `examples/ticketing` | Composite state, caching with `actors.WithCache`, and a stop-command pattern. |
-| `examples/control` | Control workflow that uses `control.AwaitInterval`, snapshots, and diagnostics queries. |
+## By Temporal task
 
-Quick command:
+- **Smallest actor:** `examples/greeter` (command + query).
+- **Key/value & façade:** `examples/hello-system` (typed queries, lightweight HTTP-ish front).
+- **Retries/timeouts:** `examples/orders` (per-command retry/timeout overrides, activities w/ results).
+- **Fan-out asks/children:** `examples/spawn` (long-lived children, one-shot `SpawnOneShot`, `Tell`, `QueryActor`).
+- **Cross-actor workflows:** `examples/telegram` (multi-command workflow, ask/query between actors, fire-and-forget activities).
+- **Caching pattern:** `examples/ticketing` (`actors.WithCache`, stop-command).
+- **Durable cadence:** `examples/control` (`control.AwaitInterval`, snapshots, diagnostics queries).
+
+## Run commands
 
 ```bash
 GOCACHE=$(pwd)/.gocache go test ./examples/greeter
+GOCACHE=$(pwd)/.gocache go test ./examples/spawn
+GOCACHE=$(pwd)/.gocache go test ./examples/control
 ```
 
 Feel free to copy/paste patterns from these directories—each one uses the same builder API and
-Temporal testsuite harness described elsewhere in the docs.
+Temporal testsuite harness described elsewhere in the docs. For real clusters, reuse the same actor
+code with `runtime.NewWorkerSet` as shown in Getting Started. Additional end-to-end apps (HTTP façades,
+gateways, CLIs) live in the samples repo: https://github.com/tactors/samples.

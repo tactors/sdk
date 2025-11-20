@@ -25,6 +25,14 @@ reference once you have skimmed the [Getting Started](GETTING_STARTED.md) guide.
 4. Finish with `.Build()` to produce an `actors.Actor`. Everything downstream (the Temporal runtime
    and the testsuite-backed testkit) works from that description.
 
+### Temporal translation at a glance
+
+- Signals → `actors.Command`; per-command timeouts/retries map to Temporal policies deterministically.
+- Queries → `actors.Query`; add `actors.WithCache` to mirror memoization.
+- GetVersion → `actors.Patch(ctx, "id")`; declare patches on the builder.
+- Continue-As-New → `WithSnapshot` or `actors.ContinueAsNew`.
+- Child workflow → `actors.Spawn` / `SpawnOneShot`; provide `WithChildKind` for one-shot.
+
 ## Per-route configuration
 
 Attach options inline to keep behavior self-documenting:
@@ -98,6 +106,17 @@ process expired messages, making it easier to propagate TTLs and back-pressure a
   rotate immediately, optionally overriding the next init payload.
 - `actors.Memo(ctx)`, `actors.UpsertSearchAttributes`, and `actors.SearchAttributes` expose platform
   metadata in a typed manner.
+
+## Common recipes
+
+- **Bound long handlers:** `actors.WithTimeout` on commands; combine with `actors.WithSignalTimeout`
+  to drop stale signals instead of flooding backlogs.
+- **Deterministic retries:** `actors.WithRetry` per command; non-retryable errors via
+  `actors.NonRetryable(err)`.
+- **Per-call queue override:** `actors.WithActivityTaskQueue` / `actors.WithChildTaskQueue` for a
+  single call; use builder-level `WithActivityQueue` / `WithWorkflowQueue` for defaults.
+- **Feature gates:** declare `builder.DeclarePatch("id", defaultOn)` and guard code with
+  `actors.Patch(ctx, "id")`; inspect via diagnostics queries.
 
 ## Examples worth studying
 

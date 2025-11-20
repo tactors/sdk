@@ -79,6 +79,15 @@ func convert(attrs []observability.Attribute) []attribute.KeyValue {
 Frameworks can swap in any tracer/meter (Datadog, Honeycomb, Prometheus, etc.) by implementing the
 same interfaces. This keeps the SDK minimal while still emitting structured spans and metrics.
 
+### Span and metric attributes (current default set)
+
+- `actor.kind`, `actor.workflow_id`, `actor.run_id`, `actor.queue` for commands, asks, queries.
+- `command.name`, `ask.target_kind`, `query.target_kind`, `message_id`, `correlation_id`.
+- Outcome tags: success/failure, error type (business/non-retryable), duration histograms per verb.
+
+Tip: reuse the same tracer/meter as your existing Temporal worker instrumentation so traces stitch
+across SDK spans and platform spans.
+
 ## Lifecycle events
 
 For richer glue (registry updates, saga tracing, custom metrics), implement `observability.Listener`

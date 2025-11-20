@@ -77,3 +77,18 @@ snapReport, _ := actors.QuerySnapshotReport(ctx, ref)
   that queue.
 - Health snapshots and worker events are read-only and thread-safe; the worker set holds the
   necessary locks while capturing snapshots so callers do not need to add extra synchronization.
+
+## Ops Playbook (Temporal Users)
+
+- **Backlogs growing:** check `actors_diag_snapshot` for `CommandsSinceLastSnapshot` and
+  `RequestedRotations` to see if Continue-As-New is stuck; ensure `WithSignalTimeout` is set on noisy
+  commands so stale signals are dropped.
+- **Handlers timing out:** correlate command spans/metrics with per-command timeout settings; use
+  `actors.WithRetry` and `actors.NonRetryable` to align with Temporal retry policies rather than
+  failing workflows.
+- **Patches during rollout:** query `actors_diag_patches` to confirm which workers flipped a patch
+  before enabling it by default; gate risky logic with `actors.Patch(ctx, id)`.
+- **Worker health:** poll `WorkerSet.HealthSnapshot()` for missing pollers or queue/kind mismatches;
+  alert when a queue shows no pollers or when activity/workflow queues diverge unexpectedly.
+- **Suggested alerts:** snapshot lag (commands since last rotation) above your cadence target; worker
+  poller count hitting zero; ask/query failure rate spikes on a specific actor kind.

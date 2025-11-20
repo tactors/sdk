@@ -24,6 +24,10 @@ covers how it is wired together and what knobs you can use.
 - `WorkerSet.StartAll(ctx)` and `StopAll()` start/stop every registered worker. Cancelling the
   context passed to `StartAll` gracefully shuts everything down. Running the same binary multiple
   times is safe because Temporal load-balances across pollers.
+- `WorkerConfig.WorkerOptions` passes through to Temporal worker options (sticky queues, interceptors,
+  concurrency limits). Use it exactly as you would with `worker.New` in plain Temporal code.
+- Queue conventions for multi-team setups: keep `<team>-<domain>-<kind>-workflow` / `-activity` or
+  override per actor; the registry records the queue names so discovery tools can render them.
 Example bootstrap:
 
 ```go
@@ -119,6 +123,8 @@ set := runtime.NewWorkerSet(cli)
 - `actors.Effect` records successful keys in workflow memo (with optional TTL). Replays skip work for
   previously completed keys—wrap activities or external calls inside the effect callback to keep
   them effectively-once.
+- Interceptors: use Temporal worker interceptors via `WorkerOptions` for logging/metrics you already
+  rely on; Tactors observability hooks still fire separately and only outside replay.
 - Error helpers keep intent explicit:
   - `actors.BusinessError` propagates typed failures without failing the workflow.
   - `actors.NonRetryable(err)` tells the runtime to stop retries immediately.

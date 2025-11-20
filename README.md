@@ -36,6 +36,8 @@ consume—no reflection, code generation, or `interface{}` plumbing.
 6. **Diagnostics & control.** [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) explains metadata export,
    registry access, patch/snapshot queries, and worker health. [`docs/CONTROL_WORKFLOWS.md`](docs/CONTROL_WORKFLOWS.md)
    covers deterministic interval helpers for maintenance actors.
+- **Already on Temporal?** Jump to [`docs/INDEX.md`](docs/INDEX.md) for a Temporal-first map,
+  mental model, and porting guide.
 
 ## Temporal runtime at a glance
 
@@ -57,6 +59,7 @@ consume—no reflection, code generation, or `interface{}` plumbing.
 - `examples/` – runnable samples referenced throughout the docs.
 - `observability/` – pluggable tracing/metrics hooks; `internal/` – supporting packages as we flesh
   out tooling.
+- More end-to-end samples live in the sibling repo: https://github.com/tactors/samples.
 
 ## Testing
 
