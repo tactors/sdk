@@ -71,6 +71,11 @@ func (c *wfContext) Activity(name string, payload any) actors.ActivityFuture {
 }
 
 func (c *wfContext) ActivityWithOptions(name string, payload any, opts actors.ActivityCallOptions) actors.ActivityFuture {
+	return c.activityWithContext(c.workflowCtx, name, payload, opts)
+}
+
+func (c *wfContext) activityWithContext(wctx workflow.Context, name string, payload any, opts actors.ActivityCallOptions) actors.ActivityFuture {
+	// honor the activity queue provided by workflow/session context
 	taskQueue := opts.TaskQueue
 	if taskQueue == "" {
 		taskQueue = c.activityQueue
@@ -85,7 +90,7 @@ func (c *wfContext) ActivityWithOptions(name string, payload any, opts actors.Ac
 	if hasRetryConfig(opts.Retry) {
 		callOpts.RetryPolicy = toTemporalRetry(opts.Retry)
 	}
-	ctx := workflow.WithActivityOptions(c.workflowCtx, callOpts)
+	ctx := workflow.WithActivityOptions(wctx, callOpts)
 	future := workflow.ExecuteActivity(ctx, name, payload)
 	return wfActivityFuture{activityCtx: ctx, future: future}
 }
@@ -149,6 +154,10 @@ func (c *wfContext) SetCorrelation(data actors.CorrelationData) {
 func (c *wfContext) SnapshotInfo() actors.SnapshotInfo {
 	info := c.snapshotInfo
 	return info
+}
+
+type temporalSessionHandle struct {
+	ctx workflow.Context
 }
 
 type queryCacheEntry struct {
@@ -825,6 +834,43 @@ func (c *wfContext) ContinueAsNew(payload any) error {
 		Correlation: c.correlation.Clone(),
 	}
 	return workflow.NewContinueAsNewError(c.workflowCtx, info.WorkflowType.Name, c.ref.ID, env)
+}
+
+func (c *wfContext) StartSession(opts actors.SessionOptions) (actors.Session, error) {
+	if opts.CreationTimeout <= 0 {
+		opts.CreationTimeout = time.Minute
+	}
+	if opts.ExecutionTimeout <= 0 {
+		opts.ExecutionTimeout = time.Hour
+	}
+	sessionCtx, err := workflow.CreateSession(c.workflowCtx, &workflow.SessionOptions{
+		CreationTimeout:  opts.CreationTimeout,
+		ExecutionTimeout: opts.ExecutionTimeout,
+		HeartbeatTimeout: opts.HeartbeatTimeout,
+	})
+	if err != nil {
+		return actors.Session{}, err
+	}
+	info := workflow.GetSessionInfo(sessionCtx)
+	handle := &temporalSessionHandle{ctx: sessionCtx}
+	return actors.NewSessionHandle(info.SessionID, c, handle), nil
+}
+
+func (c *wfContext) InvokeSessionActivity(handle any, name string, payload any, opts actors.ActivityCallOptions) (actors.ActivityFuture, error) {
+	h, ok := handle.(*temporalSessionHandle)
+	if !ok {
+		return nil, fmt.Errorf("runtime: invalid session handle")
+	}
+	return c.activityWithContext(h.ctx, name, payload, opts), nil
+}
+
+func (c *wfContext) CompleteSessionHandle(handle any) error {
+	h, ok := handle.(*temporalSessionHandle)
+	if !ok {
+		return fmt.Errorf("runtime: invalid session handle")
+	}
+	workflow.CompleteSession(h.ctx)
+	return nil
 }
 
 func toTemporalRetry(policy actors.RetryPolicy) *temporal.RetryPolicy {

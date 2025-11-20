@@ -156,6 +156,35 @@ func (f stubActivityFuture) Get() (any, error) {
 	return f.value, f.err
 }
 
+type stubSessionRuntime struct {
+	value           any
+	err             error
+	decoder         func(string, any) (any, error)
+	invokedName     string
+	invokedHandle   any
+	completeCalled  bool
+	completedHandle any
+}
+
+func (s *stubSessionRuntime) InvokeSessionActivity(handle any, name string, payload any, opts actors.ActivityCallOptions) (actors.ActivityFuture, error) {
+	s.invokedHandle = handle
+	s.invokedName = name
+	return stubActivityFuture{value: s.value, err: s.err}, nil
+}
+
+func (s *stubSessionRuntime) CompleteSessionHandle(handle any) error {
+	s.completeCalled = true
+	s.completedHandle = handle
+	return nil
+}
+
+func (s *stubSessionRuntime) DecodeActivityResult(name string, value any) (any, error) {
+	if s.decoder != nil {
+		return s.decoder(name, value)
+	}
+	return value, nil
+}
+
 type sampleCommand struct {
 	actors.CommandMsg[sampleResponse]
 	Value string
@@ -263,6 +292,18 @@ func TestContinueAsNewUnsupported(t *testing.T) {
 	}
 }
 
+func TestSessionUnsupported(t *testing.T) {
+	ctx := struct {
+		actors.Ctx
+	}{}
+	if _, err := actors.StartSession(ctx, actors.SessionOptions{}); !errors.Is(err, actors.ErrUnsupported) {
+		t.Fatalf("expected ErrUnsupported, got %v", err)
+	}
+	if err := actors.CompleteSession(actors.Session{}); !errors.Is(err, actors.ErrUnsupported) {
+		t.Fatalf("expected ErrUnsupported, got %v", err)
+	}
+}
+
 func TestRunActivityUsesDecoder(t *testing.T) {
 	ctx := &stubCtx{
 		activityValue: map[string]any{"Result": "OK"},
@@ -277,6 +318,38 @@ func TestRunActivityUsesDecoder(t *testing.T) {
 	}
 	if resp.Result != "OK" {
 		t.Fatalf("expected OK, got %s", resp.Result)
+	}
+}
+
+func TestRunSessionActivityUsesDecoder(t *testing.T) {
+	runtime := &stubSessionRuntime{
+		value: map[string]any{"Result": "OK"},
+		decoder: func(name string, value any) (any, error) {
+			m := value.(map[string]any)
+			return sampleResponse{Result: m["Result"].(string)}, nil
+		},
+	}
+	session := actors.NewSessionHandle("sess-1", runtime, "handle-1")
+	resp, err := actors.RunSessionActivity[sampleActivity, sampleResponse](session, "noop", sampleActivity{})
+	if err != nil {
+		t.Fatalf("RunSessionActivity: %v", err)
+	}
+	if resp.Result != "OK" {
+		t.Fatalf("expected decoded OK, got %s", resp.Result)
+	}
+	if runtime.invokedName != "noop" || runtime.invokedHandle != "handle-1" {
+		t.Fatalf("runtime invocation mismatch: name=%s handle=%v", runtime.invokedName, runtime.invokedHandle)
+	}
+}
+
+func TestCompleteSessionDelegates(t *testing.T) {
+	runtime := &stubSessionRuntime{}
+	session := actors.NewSessionHandle("sess-1", runtime, "handle-1")
+	if err := actors.CompleteSession(session); err != nil {
+		t.Fatalf("CompleteSession: %v", err)
+	}
+	if !runtime.completeCalled || runtime.completedHandle != "handle-1" {
+		t.Fatalf("expected complete to be called: %+v", runtime)
 	}
 }
 

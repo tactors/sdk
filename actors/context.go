@@ -89,6 +89,77 @@ func WithActivityTaskQueue(name string) ActivityCallOption {
 	}
 }
 
+// SessionOptions mirror Temporal session configuration knobs.
+type SessionOptions struct {
+	CreationTimeout  time.Duration
+	ExecutionTimeout time.Duration
+	HeartbeatTimeout time.Duration
+}
+
+// Session represents a host-affine slot managed by the runtime.
+type Session struct {
+	id      string
+	runtime SessionRuntime
+	handle  any
+}
+
+// ID returns the underlying session identifier exposed by the runtime.
+func (s Session) ID() string {
+	return s.id
+}
+
+// StartSession requests a host-affine slot from the runtime.
+func StartSession(ctx Ctx, opts SessionOptions) (Session, error) {
+	type starter interface {
+		StartSession(SessionOptions) (Session, error)
+	}
+	if mgr, ok := ctx.(starter); ok {
+		return mgr.StartSession(opts)
+	}
+	return Session{}, ErrUnsupported
+}
+
+// CompleteSession releases the slot acquired via StartSession.
+func CompleteSession(session Session) error {
+	if session.runtime == nil {
+		return ErrUnsupported
+	}
+	return session.runtime.CompleteSessionHandle(session.handle)
+}
+
+// RunSessionActivity executes an activity within the provided session context.
+func RunSessionActivity[Req TypedActivityMessage[Resp], Resp any](session Session, name string, payload Req, opts ...ActivityCallOption) (Resp, error) {
+	var zero Resp
+	if session.runtime == nil {
+		return zero, ErrUnsupported
+	}
+	callOpts := buildActivityCallOptions(opts...)
+	fut, err := session.runtime.InvokeSessionActivity(session.handle, name, payload, callOpts)
+	if err != nil {
+		return zero, err
+	}
+	val, err := fut.Get()
+	if err != nil {
+		return zero, err
+	}
+	if decoder, ok := session.runtime.(interface {
+		DecodeActivityResult(name string, value any) (any, error)
+	}); ok {
+		decoded, derr := decoder.DecodeActivityResult(name, val)
+		if derr != nil {
+			return zero, derr
+		}
+		val = decoded
+	}
+	return decodeTypedResult[Resp](val)
+}
+
+// RunSessionActivityNoResult executes an activity within the session and only returns an error.
+func RunSessionActivityNoResult[Req TypedActivityMessage[struct{}]](session Session, name string, payload Req, opts ...ActivityCallOption) error {
+	_, err := RunSessionActivity[Req, struct{}](session, name, payload, opts...)
+	return err
+}
+
 func buildActivityCallOptions(opts ...ActivityCallOption) ActivityCallOptions {
 	cfg := ActivityCallOptions{}
 	for _, opt := range opts {
@@ -405,3 +476,13 @@ func WithEffectTTL(ttl time.Duration) EffectOption {
 
 // EffectFunc encapsulates a side effect function invoked via ctx.Effect.
 type EffectFunc func(Ctx) (any, error)
+
+type SessionRuntime interface {
+	InvokeSessionActivity(handle any, name string, payload any, opts ActivityCallOptions) (ActivityFuture, error)
+	CompleteSessionHandle(handle any) error
+}
+
+// NewSessionHandle constructs a session backed by the provided runtime implementation.
+func NewSessionHandle(id string, runtime SessionRuntime, handle any) Session {
+	return Session{id: id, runtime: runtime, handle: handle}
+}

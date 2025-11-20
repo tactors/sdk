@@ -16,7 +16,7 @@ import (
 func TestWorkerSetReusesQueues(t *testing.T) {
 	stubs := map[string]*stubWorker{}
 	set := newWorkerSetWithFactory(func(queue string, opts worker.Options) temporalWorker {
-		w := &stubWorker{queue: queue}
+		w := &stubWorker{queue: queue, opts: opts}
 		stubs[queue] = w
 		return w
 	}, WorkerConfig{})
@@ -47,6 +47,7 @@ func TestWorkerSetStartAllStopsOnCancel(t *testing.T) {
 	next := 0
 	set := newWorkerSetWithFactory(func(queue string, opts worker.Options) temporalWorker {
 		w := stubs[next]
+		w.opts = opts
 		next++
 		return w
 	}, WorkerConfig{})
@@ -80,6 +81,7 @@ func TestWorkerSetStartAllIdempotent(t *testing.T) {
 	next := 0
 	set := newWorkerSetWithFactory(func(queue string, opts worker.Options) temporalWorker {
 		w := stubs[next]
+		w.opts = opts
 		next++
 		return w
 	}, WorkerConfig{})
@@ -112,7 +114,7 @@ func TestWorkerSetStartAllIdempotent(t *testing.T) {
 
 func TestWorkerSetHealthSnapshot(t *testing.T) {
 	set := newWorkerSetWithFactory(func(queue string, opts worker.Options) temporalWorker {
-		return &stubWorker{queue: queue}
+		return &stubWorker{queue: queue, opts: opts}
 	}, WorkerConfig{})
 
 	alpha := actors.NewStateful("alpha", func() struct{} { return struct{}{} }).
@@ -166,7 +168,7 @@ func TestWorkerSetHealthSnapshot(t *testing.T) {
 
 func TestWorkerSetStartError(t *testing.T) {
 	set := newWorkerSetWithFactory(func(queue string, opts worker.Options) temporalWorker {
-		return &stubWorker{queue: queue, failStart: true}
+		return &stubWorker{queue: queue, failStart: true, opts: opts}
 	}, WorkerConfig{})
 	actor := actors.NewStateful("fail-start", func() struct{} { return struct{}{} }).
 		Build()
@@ -179,6 +181,47 @@ func TestWorkerSetStartError(t *testing.T) {
 	}
 }
 
+func TestWorkerSetDoesNotEnableSessionsByDefault(t *testing.T) {
+	var created *stubWorker
+	set := newWorkerSetWithFactory(func(queue string, opts worker.Options) temporalWorker {
+		created = &stubWorker{queue: queue, opts: opts}
+		return created
+	}, WorkerConfig{})
+	actor := actors.NewStateful("with-session-default", func() struct{} { return struct{}{} }).
+		Build()
+	if _, err := set.Register(actor, WorkerConfig{}); err != nil {
+		t.Fatalf("register actor: %v", err)
+	}
+	if created == nil {
+		t.Fatalf("workflow worker not created")
+	}
+	if created.opts.EnableSessionWorker {
+		t.Fatalf("expected session worker disabled by default, opts=%+v", created.opts)
+	}
+}
+
+func TestWorkerSetRespectsSessionOptIn(t *testing.T) {
+	var created *stubWorker
+	set := newWorkerSetWithFactory(func(queue string, opts worker.Options) temporalWorker {
+		created = &stubWorker{queue: queue, opts: opts}
+		return created
+	}, WorkerConfig{})
+	actor := actors.NewStateful("session-optout", func() struct{} { return struct{}{} }).
+		Build()
+	cfg := WorkerConfig{
+		WorkerOptions: &worker.Options{EnableSessionWorker: true},
+	}
+	if _, err := set.Register(actor, cfg); err != nil {
+		t.Fatalf("register actor: %v", err)
+	}
+	if created == nil {
+		t.Fatalf("workflow worker not created")
+	}
+	if !created.opts.EnableSessionWorker {
+		t.Fatalf("expected session worker enabled when explicitly requested; opts=%+v", created.opts)
+	}
+}
+
 type stubWorker struct {
 	queue      string
 	startCount int
@@ -186,6 +229,7 @@ type stubWorker struct {
 	workflows  []string
 	activities []string
 	failStart  bool
+	opts       worker.Options
 }
 
 func (s *stubWorker) RegisterWorkflow(w interface{}) {}
