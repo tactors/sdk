@@ -188,6 +188,7 @@ type stubSessionRuntime struct {
 	invokedHandle   any
 	completeCalled  bool
 	completedHandle any
+	activityRoutes  map[string]string
 }
 
 func (s *stubSessionRuntime) InvokeSessionActivity(handle any, name string, payload any, opts actors.ActivityCallOptions) (actors.ActivityFuture, error) {
@@ -207,6 +208,14 @@ func (s *stubSessionRuntime) DecodeActivityResult(name string, value any) (any, 
 		return s.decoder(name, value)
 	}
 	return value, nil
+}
+
+func (s *stubSessionRuntime) ActivityName(typeKey string) (string, bool) {
+	if s.activityRoutes == nil {
+		return "", false
+	}
+	name, ok := s.activityRoutes[typeKey]
+	return name, ok
 }
 
 type sampleCommand struct {
@@ -352,9 +361,12 @@ func TestRunSessionActivityUsesDecoder(t *testing.T) {
 			m := value.(map[string]any)
 			return sampleResponse{Result: m["Result"].(string)}, nil
 		},
+		activityRoutes: map[string]string{
+			actors.TypeKeyOf(sampleActivity{}): "noop",
+		},
 	}
 	session := actors.NewSessionHandle("sess-1", runtime, "handle-1")
-	resp, err := actors.RunSessionActivity[sampleActivity, sampleResponse](session, "noop", sampleActivity{})
+	resp, err := actors.RunSessionActivity[sampleActivity, sampleResponse](session, sampleActivity{})
 	if err != nil {
 		t.Fatalf("RunSessionActivity: %v", err)
 	}

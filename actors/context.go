@@ -128,7 +128,20 @@ func CompleteSession(session Session) error {
 }
 
 // RunSessionActivity executes an activity within the provided session context.
-func RunSessionActivity[Req TypedActivityMessage[Resp], Resp any](session Session, name string, payload Req, opts ...ActivityCallOption) (Resp, error) {
+func RunSessionActivity[Req TypedActivityMessage[Resp], Resp any](session Session, payload Req, opts ...ActivityCallOption) (Resp, error) {
+	var zero Resp
+	if session.runtime == nil {
+		return zero, ErrUnsupported
+	}
+	name, err := resolveActivityName(session.runtime, payload)
+	if err != nil {
+		return zero, err
+	}
+	return RunSessionActivityNamed[Req, Resp](session, name, payload, opts...)
+}
+
+// RunSessionActivityNamed executes an activity within the provided session context by explicit name.
+func RunSessionActivityNamed[Req TypedActivityMessage[Resp], Resp any](session Session, name string, payload Req, opts ...ActivityCallOption) (Resp, error) {
 	var zero Resp
 	if session.runtime == nil {
 		return zero, ErrUnsupported
@@ -155,8 +168,14 @@ func RunSessionActivity[Req TypedActivityMessage[Resp], Resp any](session Sessio
 }
 
 // RunSessionActivityNoResult executes an activity within the session and only returns an error.
-func RunSessionActivityNoResult[Req TypedActivityMessage[struct{}]](session Session, name string, payload Req, opts ...ActivityCallOption) error {
-	_, err := RunSessionActivity[Req, struct{}](session, name, payload, opts...)
+func RunSessionActivityNoResult[Req TypedActivityMessage[struct{}]](session Session, payload Req, opts ...ActivityCallOption) error {
+	_, err := RunSessionActivity[Req, struct{}](session, payload, opts...)
+	return err
+}
+
+// RunSessionActivityNoResultNamed executes a named session activity that only returns an error.
+func RunSessionActivityNoResultNamed[Req TypedActivityMessage[struct{}]](session Session, name string, payload Req, opts ...ActivityCallOption) error {
+	_, err := RunSessionActivityNamed[Req, struct{}](session, name, payload, opts...)
 	return err
 }
 
