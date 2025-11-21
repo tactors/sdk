@@ -34,6 +34,7 @@ type Description struct {
 	activityDecoders map[string]func(any) (any, error)
 	ActivityTypes    map[string]string
 	ActivityResults  map[string]string
+	ActivityNames    map[string]string
 	CommandTypes     map[string]string
 	QueryTypes       map[string]string
 	Patches          map[string]PatchSpec
@@ -333,6 +334,9 @@ func (a ActivityAction[S]) apply(desc *Description) {
 	if desc.ActivityResults == nil {
 		desc.ActivityResults = make(map[string]string)
 	}
+	if desc.ActivityNames == nil {
+		desc.ActivityNames = make(map[string]string)
+	}
 	key := strings.TrimSpace(a.name)
 	desc.Activities[key] = a.fn
 	if a.decodeResult != nil {
@@ -340,6 +344,7 @@ func (a ActivityAction[S]) apply(desc *Description) {
 	}
 	desc.ActivityTypes[key] = a.requestType
 	desc.ActivityResults[key] = a.responseType
+	desc.ActivityNames[a.requestType] = key
 }
 
 // New declares a new actor kind.
@@ -540,6 +545,7 @@ func newDescription(kind string) *Description {
 		activityDecoders: make(map[string]func(any) (any, error)),
 		ActivityTypes:    make(map[string]string),
 		ActivityResults:  make(map[string]string),
+		ActivityNames:    make(map[string]string),
 		CommandTypes:     make(map[string]string),
 		QueryTypes:       make(map[string]string),
 		Patches:          make(map[string]PatchSpec),
@@ -591,6 +597,12 @@ func (d *Description) clone() *Description {
 		out.ActivityResults = make(map[string]string, len(d.ActivityResults))
 		for k, v := range d.ActivityResults {
 			out.ActivityResults[k] = v
+		}
+	}
+	if d.ActivityNames != nil {
+		out.ActivityNames = make(map[string]string, len(d.ActivityNames))
+		for k, v := range d.ActivityNames {
+			out.ActivityNames[k] = v
 		}
 	}
 	out.SnapshotEvery = d.SnapshotEvery
@@ -831,9 +843,13 @@ func QueryFunc[S any, Req TypedQueryMessage[Resp], Resp any](fn func(Ctx, S, Req
 	return Query[S](fn, opts...)
 }
 
-// Activity wraps a typed function so handlers can invoke it without reflection.
-// Activity registers a typed activity with the given name as a fluent action.
-func Activity[P any, R any](name string, fn func(context.Context, P) (R, error)) ActivityAction[any] {
+// Activity registers a typed activity using the payload type as the route name.
+func Activity[P any, R any](fn func(context.Context, P) (R, error)) ActivityAction[any] {
+	return ActivityNamed(typeName[P](), fn)
+}
+
+// ActivityNamed registers an activity with an explicit name.
+func ActivityNamed[P any, R any](name string, fn func(context.Context, P) (R, error)) ActivityAction[any] {
 	return ActivityAction[any]{
 		name:         strings.TrimSpace(name),
 		requestType:  typeName[P](),
@@ -870,9 +886,26 @@ func Activity[P any, R any](name string, fn func(context.Context, P) (R, error))
 	}
 }
 
-// ActivityNoResult registers an activity that only returns an error.
-func ActivityNoResult[P any](name string, fn func(context.Context, P) error) ActivityAction[any] {
-	return Activity(name, func(ctx context.Context, p P) (struct{}, error) {
+// ActivityNoResult registers an activity that only returns an error using the payload type as the route name.
+func ActivityNoResult[P any](fn func(context.Context, P) error) ActivityAction[any] {
+	return Activity(func(ctx context.Context, p P) (struct{}, error) {
 		return struct{}{}, fn(ctx, p)
 	})
+}
+
+// ActivityNoResultNamed registers a no-result activity with an explicit name.
+func ActivityNoResultNamed[P any](name string, fn func(context.Context, P) error) ActivityAction[any] {
+	return ActivityNamed(name, func(ctx context.Context, p P) (struct{}, error) {
+		return struct{}{}, fn(ctx, p)
+	})
+}
+
+// ActivityAuto registers an activity using the payload type as the route name.
+func ActivityAuto[P any, R any](fn func(context.Context, P) (R, error)) ActivityAction[any] {
+	return ActivityNamed(typeName[P](), fn)
+}
+
+// ActivityNoResultAuto registers a no-result activity using the payload type as the route name.
+func ActivityNoResultAuto[P any](fn func(context.Context, P) error) ActivityAction[any] {
+	return ActivityNoResult(fn)
 }

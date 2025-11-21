@@ -165,6 +165,7 @@ func (i *temporalInstance) buildWorkflowContext(ctx workflow.Context, id string,
 		ref:              ref,
 		parent:           parent,
 		activityDecoders: i.desc.ActivityDecoders(),
+		activityNames:    i.desc.ActivityNames,
 		activityQueue:    activityQueueFor(i.desc.Kind, i.desc),
 		tracer:           observability.ActiveTracer(),
 	}

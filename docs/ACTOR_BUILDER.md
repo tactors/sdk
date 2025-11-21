@@ -72,6 +72,9 @@ actors.NewStateful("ticket", newState).
   runtime.
 - `ctx.Activity` and `ctx.ActivityWithOptions` mirror Temporal’s workflow helpers so you can invoke
   activities from commands with familiar options.
+- `actors.RunActivity` / `actors.RunActivityBackground` look up the activity name from the payload
+  type, avoiding string constants when calling from workflows. Use
+  `actors.RunActivityNamed` / `actors.BackgroundActivity` when you need to pin a specific route.
 - `actors.RunActivity` / `actors.RunActivityNoResult` wrap `ctx.Activity` and decode typed responses.
   Embed `actors.ActivityMsg[Resp]` in each request struct so the helper can infer the expected type.
 - `actors.BackgroundActivity` launches fire-and-forget work, logging failures without blocking the

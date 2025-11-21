@@ -24,6 +24,12 @@ type stubCtx struct {
 	activityValue   any
 	activityErr     error
 	activityDecoder func(string, any) (any, error)
+	activityRoutes  map[string]string
+	activityCalls   []struct {
+		name    string
+		payload any
+		opts    actors.ActivityCallOptions
+	}
 	backgroundCalls []struct {
 		name    string
 		payload any
@@ -92,10 +98,20 @@ func (s *stubCtx) BackgroundActivity(name string, payload any) {
 }
 
 func (s *stubCtx) Activity(name string, payload any) actors.ActivityFuture {
+	s.activityCalls = append(s.activityCalls, struct {
+		name    string
+		payload any
+		opts    actors.ActivityCallOptions
+	}{name: name, payload: payload})
 	return stubActivityFuture{value: s.activityValue, err: s.activityErr}
 }
 
 func (s *stubCtx) ActivityWithOptions(name string, payload any, opts actors.ActivityCallOptions) actors.ActivityFuture {
+	s.activityCalls = append(s.activityCalls, struct {
+		name    string
+		payload any
+		opts    actors.ActivityCallOptions
+	}{name: name, payload: payload, opts: opts})
 	return stubActivityFuture{value: s.activityValue, err: s.activityErr}
 }
 
@@ -104,6 +120,14 @@ func (s *stubCtx) DecodeActivityResult(name string, value any) (any, error) {
 		return s.activityDecoder(name, value)
 	}
 	return value, nil
+}
+
+func (s *stubCtx) ActivityName(typeKey string) (string, bool) {
+	if s.activityRoutes == nil {
+		return "", false
+	}
+	name, ok := s.activityRoutes[typeKey]
+	return name, ok
 }
 
 func (s *stubCtx) UpsertSearchAttributes(attrs map[string]any) error {
@@ -312,7 +336,7 @@ func TestRunActivityUsesDecoder(t *testing.T) {
 			return sampleResponse{Result: m["Result"].(string)}, nil
 		},
 	}
-	resp, err := actors.RunActivity(ctx, "sendConfirmation", sampleActivity{Value: "req"})
+	resp, err := actors.RunActivityNamed(ctx, "sendConfirmation", sampleActivity{Value: "req"})
 	if err != nil {
 		t.Fatalf("RunActivity: %v", err)
 	}
@@ -390,8 +414,45 @@ func TestSpawnUnsupported(t *testing.T) {
 
 func TestRunActivityNoResult(t *testing.T) {
 	ctx := &stubCtx{activityValue: struct{}{}}
-	if err := actors.RunActivityNoResult(ctx, "noop", sampleNoopActivity{}); err != nil {
+	if err := actors.RunActivityNoResultNamed(ctx, "noop", sampleNoopActivity{}); err != nil {
 		t.Fatalf("RunActivityNoResult: %v", err)
+	}
+}
+
+func TestRunActivityTypedRoutesByPayload(t *testing.T) {
+	ctx := &stubCtx{
+		activityValue: map[string]any{"Result": "OK"},
+		activityDecoder: func(name string, value any) (any, error) {
+			m, _ := value.(map[string]any)
+			return sampleResponse{Result: m["Result"].(string)}, nil
+		},
+		activityRoutes: map[string]string{
+			actors.TypeKeyOf(sampleActivity{}): "sendConfirmation",
+		},
+	}
+	resp, err := actors.RunActivityTyped[sampleActivity, sampleResponse](ctx, sampleActivity{Value: "typed"})
+	if err != nil {
+		t.Fatalf("RunActivityTyped: %v", err)
+	}
+	if resp.Result != "OK" {
+		t.Fatalf("expected OK, got %s", resp.Result)
+	}
+	if len(ctx.activityCalls) != 1 || ctx.activityCalls[0].name != "sendConfirmation" {
+		t.Fatalf("activity not routed: %#v", ctx.activityCalls)
+	}
+}
+
+func TestRunActivityBackgroundRoutesByPayload(t *testing.T) {
+	ctx := &stubCtx{
+		activityRoutes: map[string]string{
+			actors.TypeKeyOf(sampleNoopActivity{}): "noop",
+		},
+	}
+	if err := actors.RunActivityBackground[sampleNoopActivity, struct{}](ctx, sampleNoopActivity{}); err != nil {
+		t.Fatalf("RunActivityBackground: %v", err)
+	}
+	if len(ctx.backgroundCalls) != 1 || ctx.backgroundCalls[0].name != "noop" {
+		t.Fatalf("background activity not routed: %#v", ctx.backgroundCalls)
 	}
 }
 

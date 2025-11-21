@@ -1823,13 +1823,13 @@ func newCommandControlActor() actors.Actor {
 func newEffectActor(counter *atomic.Int32, snapshot bool) actors.Actor {
 	builder := actors.NewStateful("effect", func() effectState { return effectState{} }).
 		With(
-			actors.Activity[recordEffectActivity, string]("record-effect", func(ctx context.Context, payload recordEffectActivity) (string, error) {
+			actors.ActivityNamed("record-effect", func(ctx context.Context, payload recordEffectActivity) (string, error) {
 				val := counter.Add(1)
 				return fmt.Sprintf("%s-%d", payload.Key, val), nil
 			}),
 			actors.Command(func(ctx actors.Ctx, st *effectState, cmd effectCommand) (struct{}, error) {
 				result, err := actors.Effect[string](ctx, cmd.Key, func(inner actors.Ctx) (string, error) {
-					return actors.RunActivity(inner, "record-effect", recordEffectActivity{Key: cmd.Key}, actors.WithActivityStartToClose(5*time.Second))
+					return actors.RunActivityNamed(inner, "record-effect", recordEffectActivity{Key: cmd.Key}, actors.WithActivityStartToClose(5*time.Second))
 				})
 				if err != nil {
 					return struct{}{}, err
@@ -2683,7 +2683,7 @@ func newActivityEdgeActor() actors.Actor {
 		})
 	return builder.
 		With(
-			actors.Activity[deadlineActivityReq, bool]("deadline-check", func(ctx context.Context, req deadlineActivityReq) (bool, error) {
+			actors.ActivityNamed("deadline-check", func(ctx context.Context, req deadlineActivityReq) (bool, error) {
 				select {
 				case <-ctx.Done():
 					return true, ctx.Err()
@@ -2692,7 +2692,7 @@ func newActivityEdgeActor() actors.Actor {
 				}
 			}),
 			actors.Command(func(ctx actors.Ctx, st *activityEdgeState, cmd activityDeadlineCommand) (struct{}, error) {
-				if _, err := actors.RunActivity[deadlineActivityReq, bool](ctx, "deadline-check", deadlineActivityReq{Wait: cmd.Work},
+				if _, err := actors.RunActivityNamed[deadlineActivityReq, bool](ctx, "deadline-check", deadlineActivityReq{Wait: cmd.Work},
 					actors.WithActivityStartToClose(cmd.StartToClose),
 					actors.WithActivityScheduleToClose(cmd.StartToClose)); err != nil {
 					st.Errors = append(st.Errors, err.Error())
@@ -2700,7 +2700,7 @@ func newActivityEdgeActor() actors.Actor {
 				return struct{}{}, nil
 			}),
 			actors.Command(func(ctx actors.Ctx, st *activityEdgeState, _ activityDecodeCommand) (struct{}, error) {
-				_, err := actors.RunActivity[decodeMismatchRequest, int](ctx, "decode-mismatch", decodeMismatchRequest{}, actors.WithActivityStartToClose(time.Second))
+				_, err := actors.RunActivityNamed[decodeMismatchRequest, int](ctx, "decode-mismatch", decodeMismatchRequest{}, actors.WithActivityStartToClose(time.Second))
 				if err != nil {
 					st.Errors = append(st.Errors, err.Error())
 					return struct{}{}, nil
@@ -2731,7 +2731,7 @@ func newEffectEdgeActor(counter *atomic.Int32) actors.Actor {
 			return effectEdgeState{History: append([]string(nil), init.History...)}, nil
 		})).
 		With(
-			actors.Activity[recordEffectActivity, string]("edge-effect", func(ctx context.Context, payload recordEffectActivity) (string, error) {
+			actors.ActivityNamed("edge-effect", func(ctx context.Context, payload recordEffectActivity) (string, error) {
 				n := counter.Add(1)
 				return fmt.Sprintf("%s-%d", payload.Key, n), nil
 			}),
@@ -2741,7 +2741,7 @@ func newEffectEdgeActor(counter *atomic.Int32) actors.Actor {
 					opts = append(opts, actors.WithEffectTTL(cmd.TTL))
 				}
 				result, err := actors.Effect[string](ctx, cmd.Key, func(inner actors.Ctx) (string, error) {
-					return actors.RunActivity(inner, "edge-effect", recordEffectActivity{Key: cmd.Key}, actors.WithActivityStartToClose(5*time.Second))
+					return actors.RunActivityNamed(inner, "edge-effect", recordEffectActivity{Key: cmd.Key}, actors.WithActivityStartToClose(5*time.Second))
 				}, opts...)
 				if err != nil {
 					return struct{}{}, err

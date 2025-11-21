@@ -59,7 +59,7 @@ func TestDescriptionMetadata(t *testing.T) {
 			actors.Query(func(ctx actors.Ctx, st metadataState, _ sumQuery) (int, error) {
 				return st.Count, nil
 			}, actors.WithCache(5*time.Second)),
-			actors.Activity("log", func(context.Context, logActivity) (struct{}, error) {
+			actors.ActivityNamed("log", func(context.Context, logActivity) (struct{}, error) {
 				return struct{}{}, nil
 			}),
 		).
@@ -113,6 +113,9 @@ func TestDescriptionMetadata(t *testing.T) {
 	}
 	if meta.QueryTypes["actors_test.sumQuery"] == "" {
 		t.Fatalf("query type mapping missing entries: %#v", meta.QueryTypes)
+	}
+	if meta.ActivityTypes["actors_test.logActivity"] != "log" {
+		t.Fatalf("activity type mapping missing entries: %#v", meta.ActivityTypes)
 	}
 	if len(meta.Patches) != 1 || meta.Patches[0].ID != "change-1" || !meta.Patches[0].DefaultOn {
 		t.Fatalf("patch metadata missing: %#v", meta.Patches)

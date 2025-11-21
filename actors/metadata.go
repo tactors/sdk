@@ -22,6 +22,7 @@ type ActorMetadata struct {
 	Patches        []PatchMetadata
 	CommandTypes   map[string]string
 	QueryTypes     map[string]string
+	ActivityTypes  map[string]string
 }
 
 // StartMetadata describes the init payload schema.
@@ -84,6 +85,9 @@ func (d *Description) Metadata() ActorMetadata {
 	}
 	if len(d.QueryTypes) > 0 {
 		meta.QueryTypes = maps.Clone(d.QueryTypes)
+	}
+	if len(d.ActivityNames) > 0 {
+		meta.ActivityTypes = maps.Clone(d.ActivityNames)
 	}
 	meta.Commands = collectCommandMetadata(d)
 	meta.Queries = collectQueryMetadata(d)

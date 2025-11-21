@@ -64,7 +64,7 @@ type SendConfirmationActivity struct {
 func OrderActor() actors.Actor {
 	return actors.NewStateful("order", func() OrderState { return OrderState{} }).
 		With(
-			actors.Activity("sendConfirmation", func(ctx context.Context, req SendConfirmationActivity) (string, error) {
+			actors.Activity(func(ctx context.Context, req SendConfirmationActivity) (string, error) {
 				return fmt.Sprintf("order-%s-confirmed", req.OrderID), nil
 			}),
 			actors.Command(func(ctx actors.Ctx, st *OrderState, cmd StartOrderCommand) (StartOrderResponse, error) {
@@ -87,7 +87,7 @@ func OrderActor() actors.Actor {
 				}
 				st.Submitted = true
 				st.SubmittedAt = ctx.Now()
-				confirmation, err := actors.RunActivity(ctx, "sendConfirmation", SendConfirmationActivity{OrderID: st.ID},
+				confirmation, err := actors.RunActivity(ctx, SendConfirmationActivity{OrderID: st.ID},
 					actors.WithActivityStartToClose(5*time.Second))
 				if err != nil {
 					return SubmitOrderResponse{}, err

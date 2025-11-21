@@ -76,7 +76,7 @@ func TestCommandAndQueryFuncAdapters(t *testing.T) {
 
 func TestActivityNoResultAdapter(t *testing.T) {
 	builder := NewStateful("nores", func() struct{} { return struct{}{} }).
-		With(ActivityNoResult("cleanup", func(context.Context, string) error { return nil }))
+		With(ActivityNoResultNamed("cleanup", func(context.Context, string) error { return nil }))
 	desc := builder.Build().Spec()
 	act := desc.Activities["cleanup"]
 	if act == nil {

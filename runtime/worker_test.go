@@ -54,7 +54,7 @@ func TestWorkerSetStartAllStopsOnCancel(t *testing.T) {
 
 	actor := actors.NewStateful("queue-test", func() struct{} { return struct{}{} }).
 		With(
-			actors.Activity("noop", func(ctx context.Context, _ struct{}) (struct{}, error) {
+			actors.ActivityNamed("noop", func(ctx context.Context, _ struct{}) (struct{}, error) {
 				return struct{}{}, nil
 			}),
 		).
@@ -87,7 +87,7 @@ func TestWorkerSetStartAllIdempotent(t *testing.T) {
 	}, WorkerConfig{})
 	actor := actors.NewStateful("idempotent", func() struct{} { return struct{}{} }).
 		With(
-			actors.Activity("noop", func(ctx context.Context, _ struct{}) (struct{}, error) {
+			actors.ActivityNamed("noop", func(ctx context.Context, _ struct{}) (struct{}, error) {
 				return struct{}{}, nil
 			}),
 		).
@@ -120,7 +120,7 @@ func TestWorkerSetHealthSnapshot(t *testing.T) {
 	alpha := actors.NewStateful("alpha", func() struct{} { return struct{}{} }).
 		WithActivityQueue("alpha-activities").
 		With(
-			actors.Activity("noop", func(ctx context.Context, _ struct{}) (struct{}, error) {
+			actors.ActivityNamed("noop", func(ctx context.Context, _ struct{}) (struct{}, error) {
 				return struct{}{}, nil
 			}),
 		).Build()

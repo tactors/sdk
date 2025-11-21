@@ -60,7 +60,7 @@ func TelegramSupportActor() actors.Actor {
 		WithTimeout(4*24*time.Hour).
 		WithSignalTimeout("assign", 3*time.Second).
 		With(
-			actors.ActivityNoResult("sendTelegram", sendTelegramMessage),
+			actors.ActivityNoResultNamed("sendTelegram", sendTelegramMessage),
 			actors.Start(func(ctx actors.Ctx, init Init) (TicketState, error) {
 				state := TicketState{Threads: init.Threads, SLA: 2 * time.Hour}
 				return state, nil
@@ -73,7 +73,7 @@ func TelegramSupportActor() actors.Actor {
 				return ResponseAssign{OK: true}, nil
 			}, actors.WithTimeout(3*time.Second)),
 			actors.Command(func(ctx actors.Ctx, st *TicketState, msg CommandAnswer) (ResponseAnswer, error) {
-				err := actors.RunActivityNoResult(ctx, "sendTelegram", SendTelegramActivity{
+				err := actors.RunActivityNoResultNamed(ctx, "sendTelegram", SendTelegramActivity{
 					ThreadID: msg.ThreadID,
 					Body:     msg.Body,
 				}, actors.WithActivityStartToClose(5*time.Second))

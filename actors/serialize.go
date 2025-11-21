@@ -34,6 +34,7 @@ type serializedActor struct {
 	Patches       []serializedPatch    `json:"patches,omitempty"`
 	CommandTypes  []serializedTypeMap  `json:"commandTypes,omitempty"`
 	QueryTypes    []serializedTypeMap  `json:"queryTypes,omitempty"`
+	ActivityTypes []serializedTypeMap  `json:"activityTypes,omitempty"`
 }
 
 type serializedRetry struct {
@@ -145,6 +146,7 @@ func toSerializedActor(meta ActorMetadata) serializedActor {
 		Patches:       make([]serializedPatch, 0, len(meta.Patches)),
 		CommandTypes:  toSerializedTypeMap(meta.CommandTypes),
 		QueryTypes:    toSerializedTypeMap(meta.QueryTypes),
+		ActivityTypes: toSerializedTypeMap(meta.ActivityTypes),
 	}
 	out.Retry = toSerializedRetry(meta.DefaultRetry)
 	for _, cmd := range meta.Commands {
@@ -198,6 +200,7 @@ func fromSerializedActor(s serializedActor) (ActorMetadata, error) {
 		Start:          StartMetadata{InputType: s.Start.Input},
 		CommandTypes:   fromSerializedTypeMap(s.CommandTypes),
 		QueryTypes:     fromSerializedTypeMap(s.QueryTypes),
+		ActivityTypes:  fromSerializedTypeMap(s.ActivityTypes),
 	}
 	retry, err := fromSerializedRetry(s.Retry)
 	if err != nil {

@@ -43,6 +43,7 @@ type wfContext struct {
 	shouldStop       bool
 	activityDecoders map[string]func(any) (any, error)
 	activityQueue    string
+	activityNames    map[string]string
 	messageMeta      actors.MessageMetadata
 	correlation      actors.CorrelationData
 	messageSeq       int
@@ -120,6 +121,13 @@ func (c *wfContext) DecodeActivityResult(name string, value any) (any, error) {
 		return decode(value)
 	}
 	return value, nil
+}
+func (c *wfContext) ActivityName(typeKey string) (string, bool) {
+	if len(c.activityNames) == 0 {
+		return "", false
+	}
+	name, ok := c.activityNames[typeKey]
+	return name, ok
 }
 func (c *wfContext) Logger() actors.Logger {
 	if c.logger == nil {

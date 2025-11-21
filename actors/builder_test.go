@@ -189,7 +189,7 @@ func TestBuilderWithMixedActions(t *testing.T) {
 			}) (string, error) {
 				return st.Value, nil
 			}),
-			actors.Activity("noop", func(context.Context, struct{ Value string }) (struct{}, error) {
+			actors.Activity(func(context.Context, struct{ Value string }) (struct{}, error) {
 				return struct{}{}, nil
 			}),
 		).
@@ -233,7 +233,7 @@ func TestBuilderCommandDecodingErrors(t *testing.T) {
 func TestActivityWrappers(t *testing.T) {
 	name := "send"
 	actor := actors.NewStateful("activity", func() builderState { return builderState{} }).
-		With(actors.Activity(name, func(ctx context.Context, req struct {
+		With(actors.ActivityNamed(name, func(ctx context.Context, req struct {
 			Value string
 		}) (struct{ Result string }, error) {
 			return struct{ Result string }{Result: req.Value}, nil

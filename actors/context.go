@@ -345,6 +345,26 @@ func BackgroundActivity(ctx Ctx, name string, payload any) {
 	ctx.BackgroundActivity(name, payload)
 }
 
+type activityRouter interface {
+	ActivityName(typeKey string) (string, bool)
+}
+
+func resolveActivityName(ctx any, payload any) (string, error) {
+	typeKey := TypeKeyOf(payload)
+	if typeKey == "" {
+		return "", fmt.Errorf("actors: activity payload %T missing type metadata", payload)
+	}
+	router, ok := ctx.(activityRouter)
+	if !ok {
+		return "", ErrUnsupported
+	}
+	name, ok := router.ActivityName(typeKey)
+	if !ok || name == "" {
+		return "", fmt.Errorf("actors: no activity registered for payload type %s", typeKey)
+	}
+	return name, nil
+}
+
 // SearchAttributes returns the workflow search attributes if the runtime exposes them.
 func SearchAttributes(ctx Ctx) map[string]any {
 	if ctx == nil {
@@ -411,8 +431,18 @@ func Snapshot(ctx Ctx) SnapshotInfo {
 	return ctx.SnapshotInfo()
 }
 
-// RunActivity executes an activity synchronously and decodes the typed result.
-func RunActivity[Req TypedActivityMessage[Resp], Resp any](ctx Ctx, name string, payload Req, opts ...ActivityCallOption) (Resp, error) {
+// RunActivity executes an activity synchronously and decodes the typed result, routing by payload type.
+func RunActivity[Req TypedActivityMessage[Resp], Resp any](ctx Ctx, payload Req, opts ...ActivityCallOption) (Resp, error) {
+	var zero Resp
+	name, err := resolveActivityName(ctx, payload)
+	if err != nil {
+		return zero, err
+	}
+	return RunActivityNamed[Req, Resp](ctx, name, payload, opts...)
+}
+
+// RunActivityNamed executes an activity by explicit name and decodes the typed result.
+func RunActivityNamed[Req TypedActivityMessage[Resp], Resp any](ctx Ctx, name string, payload Req, opts ...ActivityCallOption) (Resp, error) {
 	var zero Resp
 	if ctx == nil {
 		return zero, ErrUnsupported
@@ -435,10 +465,31 @@ func RunActivity[Req TypedActivityMessage[Resp], Resp any](ctx Ctx, name string,
 	return decodeTypedResult[Resp](val)
 }
 
-// RunActivityNoResult executes an activity that only returns an error.
-func RunActivityNoResult[Req TypedActivityMessage[struct{}]](ctx Ctx, name string, payload Req, opts ...ActivityCallOption) error {
-	_, err := RunActivity[Req, struct{}](ctx, name, payload, opts...)
+// RunActivityNoResult executes an activity that only returns an error, routing by payload type.
+func RunActivityNoResult[Req TypedActivityMessage[struct{}]](ctx Ctx, payload Req, opts ...ActivityCallOption) error {
+	_, err := RunActivity[Req, struct{}](ctx, payload, opts...)
 	return err
+}
+
+// RunActivityNoResultNamed executes a named activity that only returns an error.
+func RunActivityNoResultNamed[Req TypedActivityMessage[struct{}]](ctx Ctx, name string, payload Req, opts ...ActivityCallOption) error {
+	_, err := RunActivityNamed[Req, struct{}](ctx, name, payload, opts...)
+	return err
+}
+
+// RunActivityTyped resolves the activity name from the payload type and executes it.
+func RunActivityTyped[Req TypedActivityMessage[Resp], Resp any](ctx Ctx, payload Req, opts ...ActivityCallOption) (Resp, error) {
+	return RunActivity[Req, Resp](ctx, payload, opts...)
+}
+
+// RunActivityBackground launches a fire-and-forget activity based on the payload type.
+func RunActivityBackground[Req TypedActivityMessage[Resp], Resp any](ctx Ctx, payload Req) error {
+	name, err := resolveActivityName(ctx, payload)
+	if err != nil {
+		return err
+	}
+	BackgroundActivity(ctx, name, payload)
+	return nil
 }
 
 func decodeTypedResult[Resp any](val any) (Resp, error) {
