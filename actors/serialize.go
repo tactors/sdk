@@ -65,9 +65,15 @@ type serializedQuery struct {
 }
 
 type serializedActivity struct {
-	Name         string `json:"name"`
-	RequestType  string `json:"requestType"`
-	ResponseType string `json:"responseType"`
+	Name            string           `json:"name"`
+	RequestType     string           `json:"requestType"`
+	ResponseType    string           `json:"responseType"`
+	ScheduleToClose string           `json:"scheduleToClose,omitempty"`
+	ScheduleToStart string           `json:"scheduleToStart,omitempty"`
+	StartToClose    string           `json:"startToClose,omitempty"`
+	Heartbeat       string           `json:"heartbeat,omitempty"`
+	TaskQueue       string           `json:"taskQueue,omitempty"`
+	Retry           *serializedRetry `json:"retry,omitempty"`
 }
 
 type serializedPatch struct {
@@ -170,9 +176,15 @@ func toSerializedActor(meta ActorMetadata) serializedActor {
 	}
 	for _, act := range meta.Activities {
 		out.Activities = append(out.Activities, serializedActivity{
-			Name:         act.Name,
-			RequestType:  act.RequestType,
-			ResponseType: act.ResponseType,
+			Name:            act.Name,
+			RequestType:     act.RequestType,
+			ResponseType:    act.ResponseType,
+			ScheduleToClose: formatDuration(act.ScheduleToClose),
+			ScheduleToStart: formatDuration(act.ScheduleToStart),
+			StartToClose:    formatDuration(act.StartToClose),
+			Heartbeat:       formatDuration(act.Heartbeat),
+			TaskQueue:       act.TaskQueue,
+			Retry:           toSerializedRetry(act.Retry),
 		})
 	}
 	for _, patch := range meta.Patches {
@@ -251,10 +263,36 @@ func fromSerializedActor(s serializedActor) (ActorMetadata, error) {
 	if len(s.Activities) > 0 {
 		meta.Activities = make([]ActivityMetadata, 0, len(s.Activities))
 		for _, act := range s.Activities {
+			scheduleToClose, err := parseDuration(act.ScheduleToClose)
+			if err != nil {
+				return ActorMetadata{}, fmt.Errorf("actors: invalid activity scheduleToClose: %w", err)
+			}
+			scheduleToStart, err := parseDuration(act.ScheduleToStart)
+			if err != nil {
+				return ActorMetadata{}, fmt.Errorf("actors: invalid activity scheduleToStart: %w", err)
+			}
+			startToClose, err := parseDuration(act.StartToClose)
+			if err != nil {
+				return ActorMetadata{}, fmt.Errorf("actors: invalid activity startToClose: %w", err)
+			}
+			heartbeat, err := parseDuration(act.Heartbeat)
+			if err != nil {
+				return ActorMetadata{}, fmt.Errorf("actors: invalid activity heartbeat: %w", err)
+			}
+			retry, err := fromSerializedRetry(act.Retry)
+			if err != nil {
+				return ActorMetadata{}, fmt.Errorf("actors: invalid activity retry: %w", err)
+			}
 			meta.Activities = append(meta.Activities, ActivityMetadata{
-				Name:         act.Name,
-				RequestType:  act.RequestType,
-				ResponseType: act.ResponseType,
+				Name:            act.Name,
+				RequestType:     act.RequestType,
+				ResponseType:    act.ResponseType,
+				ScheduleToClose: scheduleToClose,
+				ScheduleToStart: scheduleToStart,
+				StartToClose:    startToClose,
+				Heartbeat:       heartbeat,
+				TaskQueue:       act.TaskQueue,
+				Retry:           retry,
 			})
 		}
 	}

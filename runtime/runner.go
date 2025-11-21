@@ -35,8 +35,8 @@ func (r *Runner) RegisterWorkflow(register func(workflow interface{})) {
 // Activities returns wrappers suitable for registering with Temporal workers or tests.
 func (r *Runner) Activities() map[string]interface{} {
 	acts := make(map[string]interface{}, len(r.desc.Activities))
-	for name, fn := range r.desc.Activities {
-		localFn := fn
+	for name, spec := range r.desc.Activities {
+		localFn := spec.Handler
 		acts[name] = func(ctx context.Context, payload any) (any, error) {
 			return localFn(ctx, payload)
 		}

@@ -72,6 +72,9 @@ actors.NewStateful("ticket", newState).
   runtime.
 - `ctx.Activity` and `ctx.ActivityWithOptions` mirror Temporal’s workflow helpers so you can invoke
   activities from commands with familiar options.
+- Attach per-activity defaults (schedule/start-to-close, heartbeat, retry, task queue) via
+  `actors.WithActivityDefaults(...)` when registering; the runtime applies them to every call unless
+  you override via per-call options.
 - `actors.RunActivity` / `actors.RunActivityBackground` look up the activity name from the payload
   type, avoiding string constants when calling from workflows. Use
   `actors.RunActivityNamed` / `actors.BackgroundActivity` when you need to pin a specific route.

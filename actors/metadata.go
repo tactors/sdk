@@ -51,9 +51,15 @@ type QueryMetadata struct {
 
 // ActivityMetadata captures registered activity schemas.
 type ActivityMetadata struct {
-	Name         string
-	RequestType  string
-	ResponseType string
+	Name            string
+	RequestType     string
+	ResponseType    string
+	ScheduleToClose time.Duration
+	ScheduleToStart time.Duration
+	StartToClose    time.Duration
+	Heartbeat       time.Duration
+	TaskQueue       string
+	Retry           RetryPolicy
 }
 
 // PatchMetadata captures declared patch toggles.
@@ -154,10 +160,17 @@ func collectActivityMetadata(desc *Description) []ActivityMetadata {
 	sort.Strings(names)
 	out := make([]ActivityMetadata, 0, len(names))
 	for _, name := range names {
+		spec := desc.Activities[name]
 		out = append(out, ActivityMetadata{
-			Name:         name,
-			RequestType:  desc.ActivityTypes[name],
-			ResponseType: desc.ActivityResults[name],
+			Name:            name,
+			RequestType:     desc.ActivityTypes[name],
+			ResponseType:    desc.ActivityResults[name],
+			ScheduleToClose: spec.Options.ScheduleToClose,
+			ScheduleToStart: spec.Options.ScheduleToStart,
+			StartToClose:    spec.Options.StartToClose,
+			Heartbeat:       spec.Options.Heartbeat,
+			TaskQueue:       spec.Options.TaskQueue,
+			Retry:           spec.Options.Retry,
 		})
 	}
 	return out

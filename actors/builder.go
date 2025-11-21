@@ -30,7 +30,7 @@ type Description struct {
 	Start            StartHandler
 	Commands         map[string]CommandSpec
 	Queries          map[string]QuerySpec
-	Activities       map[string]ActivityFunc
+	Activities       map[string]ActivitySpec
 	activityDecoders map[string]func(any) (any, error)
 	ActivityTypes    map[string]string
 	ActivityResults  map[string]string
@@ -51,6 +51,12 @@ type RetryPolicy struct {
 
 // ActivityFunc adapts user functions into a runtime-callable activity.
 type ActivityFunc func(context.Context, any) (any, error)
+
+// ActivitySpec captures routing and defaults for an activity.
+type ActivitySpec struct {
+	Handler ActivityFunc
+	Options ActivityCallOptions
+}
 
 // PatchSpec declares a forward-compatible patch gate.
 type PatchSpec struct {
@@ -180,6 +186,7 @@ type ActivityAction[S any] struct {
 	responseType string
 	fn           ActivityFunc
 	decodeResult func(any) (any, error)
+	defaults     ActivityCallOptions
 }
 
 type commandOptions struct {
@@ -189,6 +196,16 @@ type commandOptions struct {
 }
 
 type CommandOption func(*commandOptions)
+
+type ActivityOption[S any] func(*ActivityAction[S])
+
+// WithActivityDefaults sets default call options for the activity route.
+func WithActivityDefaults(opts ...ActivityCallOption) ActivityOption[any] {
+	defaults := buildActivityCallOptions(opts...)
+	return func(action *ActivityAction[any]) {
+		action.defaults = defaults
+	}
+}
 
 // WithTimeout overrides the default timeout for this command.
 func WithTimeout(timeout time.Duration) CommandOption {
@@ -323,7 +340,7 @@ func (a QueryAction[S]) apply(desc *Description) {
 
 func (a ActivityAction[S]) apply(desc *Description) {
 	if desc.Activities == nil {
-		desc.Activities = make(map[string]ActivityFunc)
+		desc.Activities = make(map[string]ActivitySpec)
 	}
 	if desc.activityDecoders == nil {
 		desc.activityDecoders = make(map[string]func(any) (any, error))
@@ -338,7 +355,10 @@ func (a ActivityAction[S]) apply(desc *Description) {
 		desc.ActivityNames = make(map[string]string)
 	}
 	key := strings.TrimSpace(a.name)
-	desc.Activities[key] = a.fn
+	desc.Activities[key] = ActivitySpec{
+		Handler: a.fn,
+		Options: a.defaults,
+	}
 	if a.decodeResult != nil {
 		desc.activityDecoders[key] = a.decodeResult
 	}
@@ -405,10 +425,10 @@ func (b StatelessBuilder) WithActivityQueue(name string) StatelessBuilder {
 // WithActivity registers a callable that handlers can trigger via ctx.Activity.
 func (b StatelessBuilder) WithActivity(name string, fn ActivityFunc) StatelessBuilder {
 	if b.desc.Activities == nil {
-		b.desc.Activities = make(map[string]ActivityFunc)
+		b.desc.Activities = make(map[string]ActivitySpec)
 	}
 	key := strings.TrimSpace(name)
-	b.desc.Activities[key] = fn
+	b.desc.Activities[key] = ActivitySpec{Handler: fn}
 	return b
 }
 
@@ -500,10 +520,10 @@ func (b StatefulBuilder[S]) WithVersionTag(tag string) StatefulBuilder[S] {
 // WithActivity registers a callable that handlers can trigger via ctx.Activity.
 func (b StatefulBuilder[S]) WithActivity(name string, fn ActivityFunc) StatefulBuilder[S] {
 	if b.desc.Activities == nil {
-		b.desc.Activities = make(map[string]ActivityFunc)
+		b.desc.Activities = make(map[string]ActivitySpec)
 	}
 	key := strings.TrimSpace(name)
-	b.desc.Activities[key] = fn
+	b.desc.Activities[key] = ActivitySpec{Handler: fn}
 	return b
 }
 
@@ -541,7 +561,7 @@ func newDescription(kind string) *Description {
 		Commands:         make(map[string]CommandSpec),
 		Queries:          make(map[string]QuerySpec),
 		SignalTimeouts:   make(map[string]time.Duration),
-		Activities:       make(map[string]ActivityFunc),
+		Activities:       make(map[string]ActivitySpec),
 		activityDecoders: make(map[string]func(any) (any, error)),
 		ActivityTypes:    make(map[string]string),
 		ActivityResults:  make(map[string]string),
@@ -576,7 +596,7 @@ func (d *Description) clone() *Description {
 		}
 	}
 	if d.Activities != nil {
-		out.Activities = make(map[string]ActivityFunc, len(d.Activities))
+		out.Activities = make(map[string]ActivitySpec, len(d.Activities))
 		for k, v := range d.Activities {
 			out.Activities[k] = v
 		}
@@ -639,6 +659,18 @@ func (d *Description) ActivityDecoders() map[string]func(any) (any, error) {
 		return nil
 	}
 	return d.activityDecoders
+}
+
+// ActivityDefaults exposes the registered per-activity default call options.
+func (d *Description) ActivityDefaults() map[string]ActivityCallOptions {
+	if d == nil || len(d.Activities) == 0 {
+		return nil
+	}
+	out := make(map[string]ActivityCallOptions, len(d.Activities))
+	for name, spec := range d.Activities {
+		out[name] = spec.Options
+	}
+	return out
 }
 
 // PatchSpecs returns the declared patch metadata sorted by identifier.
@@ -844,13 +876,13 @@ func QueryFunc[S any, Req TypedQueryMessage[Resp], Resp any](fn func(Ctx, S, Req
 }
 
 // Activity registers a typed activity using the payload type as the route name.
-func Activity[P any, R any](fn func(context.Context, P) (R, error)) ActivityAction[any] {
-	return ActivityNamed(typeName[P](), fn)
+func Activity[P any, R any](fn func(context.Context, P) (R, error), opts ...ActivityOption[any]) ActivityAction[any] {
+	return ActivityNamed(typeName[P](), fn, opts...)
 }
 
 // ActivityNamed registers an activity with an explicit name.
-func ActivityNamed[P any, R any](name string, fn func(context.Context, P) (R, error)) ActivityAction[any] {
-	return ActivityAction[any]{
+func ActivityNamed[P any, R any](name string, fn func(context.Context, P) (R, error), opts ...ActivityOption[any]) ActivityAction[any] {
+	action := ActivityAction[any]{
 		name:         strings.TrimSpace(name),
 		requestType:  typeName[P](),
 		responseType: typeName[R](),
@@ -884,20 +916,26 @@ func ActivityNamed[P any, R any](name string, fn func(context.Context, P) (R, er
 			return fn(ctx, msg)
 		},
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&action)
+		}
+	}
+	return action
 }
 
 // ActivityNoResult registers an activity that only returns an error using the payload type as the route name.
-func ActivityNoResult[P any](fn func(context.Context, P) error) ActivityAction[any] {
+func ActivityNoResult[P any](fn func(context.Context, P) error, opts ...ActivityOption[any]) ActivityAction[any] {
 	return Activity(func(ctx context.Context, p P) (struct{}, error) {
 		return struct{}{}, fn(ctx, p)
-	})
+	}, opts...)
 }
 
 // ActivityNoResultNamed registers a no-result activity with an explicit name.
-func ActivityNoResultNamed[P any](name string, fn func(context.Context, P) error) ActivityAction[any] {
+func ActivityNoResultNamed[P any](name string, fn func(context.Context, P) error, opts ...ActivityOption[any]) ActivityAction[any] {
 	return ActivityNamed(name, func(ctx context.Context, p P) (struct{}, error) {
 		return struct{}{}, fn(ctx, p)
-	})
+	}, opts...)
 }
 
 // ActivityAuto registers an activity using the payload type as the route name.

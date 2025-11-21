@@ -43,7 +43,7 @@ func TestStatelessBuilderRegistersActivitiesAndQueues(t *testing.T) {
 	if desc.SignalTimeouts["do"] != 5*time.Second {
 		t.Fatalf("signal timeout missing")
 	}
-	if desc.Activities["job"] == nil {
+	if desc.Activities["job"].Handler == nil {
 		t.Fatalf("activity not registered")
 	}
 }
@@ -79,10 +79,10 @@ func TestActivityNoResultAdapter(t *testing.T) {
 		With(ActivityNoResultNamed("cleanup", func(context.Context, string) error { return nil }))
 	desc := builder.Build().Spec()
 	act := desc.Activities["cleanup"]
-	if act == nil {
+	if act.Handler == nil {
 		t.Fatalf("activity not registered")
 	}
-	if _, err := act(context.Background(), "payload"); err != nil {
+	if _, err := act.Handler(context.Background(), "payload"); err != nil {
 		t.Fatalf("activity returned error: %v", err)
 	}
 }

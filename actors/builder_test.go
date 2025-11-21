@@ -237,14 +237,20 @@ func TestActivityWrappers(t *testing.T) {
 			Value string
 		}) (struct{ Result string }, error) {
 			return struct{ Result string }{Result: req.Value}, nil
-		})).
+		}, actors.WithActivityDefaults(
+			actors.WithActivityStartToClose(time.Second),
+			actors.WithActivityTaskQueue("custom-tq"),
+		))).
 		Build()
 	desc := actor.Spec()
 	act := desc.Activities[name]
-	if act == nil {
+	if act.Handler == nil {
 		t.Fatalf("activity not registered")
 	}
-	out, err := act(context.Background(), struct{ Value string }{Value: "ok"})
+	if act.Options.StartToClose != time.Second || act.Options.TaskQueue != "custom-tq" {
+		t.Fatalf("activity defaults not captured: %+v", act.Options)
+	}
+	out, err := act.Handler(context.Background(), struct{ Value string }{Value: "ok"})
 	if err != nil {
 		t.Fatalf("activity call failed: %v", err)
 	}

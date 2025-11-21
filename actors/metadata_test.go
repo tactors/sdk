@@ -61,7 +61,13 @@ func TestDescriptionMetadata(t *testing.T) {
 			}, actors.WithCache(5*time.Second)),
 			actors.ActivityNamed("log", func(context.Context, logActivity) (struct{}, error) {
 				return struct{}{}, nil
-			}),
+			}, actors.WithActivityDefaults(
+				actors.WithActivityStartToClose(10*time.Second),
+				actors.WithActivityScheduleToClose(12*time.Second),
+				actors.WithActivityHeartbeat(time.Second),
+				actors.WithActivityTaskQueue("log-tq"),
+				actors.WithActivityRetry(actors.RetryPolicy{MaxAttempts: 7}),
+			)),
 		).
 		Build()
 	meta := actor.Spec().Metadata()
@@ -107,6 +113,15 @@ func TestDescriptionMetadata(t *testing.T) {
 	}
 	if len(meta.Activities) != 1 || meta.Activities[0].RequestType != "actors_test.logActivity" {
 		t.Fatalf("activity metadata missing request type: %#v", meta.Activities)
+	}
+	if meta.Activities[0].StartToClose != 10*time.Second || meta.Activities[0].ScheduleToClose != 12*time.Second {
+		t.Fatalf("activity default timeouts missing: %#v", meta.Activities[0])
+	}
+	if meta.Activities[0].Heartbeat != time.Second || meta.Activities[0].TaskQueue != "log-tq" {
+		t.Fatalf("activity defaults missing: %#v", meta.Activities[0])
+	}
+	if meta.Activities[0].Retry.MaxAttempts != 7 {
+		t.Fatalf("activity retry missing: %#v", meta.Activities[0].Retry)
 	}
 	if meta.CommandTypes["actors_test.incrementCommand"] == "" {
 		t.Fatalf("command type mapping missing entries: %#v", meta.CommandTypes)

@@ -42,6 +42,7 @@ type wfContext struct {
 	continueWaiters  map[string]workflow.Channel
 	shouldStop       bool
 	activityDecoders map[string]func(any) (any, error)
+	activityDefaults map[string]actors.ActivityCallOptions
 	activityQueue    string
 	activityNames    map[string]string
 	messageMeta      actors.MessageMetadata
@@ -76,20 +77,21 @@ func (c *wfContext) ActivityWithOptions(name string, payload any, opts actors.Ac
 }
 
 func (c *wfContext) activityWithContext(wctx workflow.Context, name string, payload any, opts actors.ActivityCallOptions) actors.ActivityFuture {
+	merged := mergeActivityOptions(c.activityDefaults[name], opts)
 	// honor the activity queue provided by workflow/session context
-	taskQueue := opts.TaskQueue
+	taskQueue := merged.TaskQueue
 	if taskQueue == "" {
 		taskQueue = c.activityQueue
 	}
 	callOpts := workflow.ActivityOptions{
-		ScheduleToCloseTimeout: opts.ScheduleToClose,
-		ScheduleToStartTimeout: opts.ScheduleToStart,
-		StartToCloseTimeout:    opts.StartToClose,
-		HeartbeatTimeout:       opts.Heartbeat,
+		ScheduleToCloseTimeout: merged.ScheduleToClose,
+		ScheduleToStartTimeout: merged.ScheduleToStart,
+		StartToCloseTimeout:    merged.StartToClose,
+		HeartbeatTimeout:       merged.Heartbeat,
 		TaskQueue:              taskQueue,
 	}
-	if hasRetryConfig(opts.Retry) {
-		callOpts.RetryPolicy = toTemporalRetry(opts.Retry)
+	if hasRetryConfig(merged.Retry) {
+		callOpts.RetryPolicy = toTemporalRetry(merged.Retry)
 	}
 	ctx := workflow.WithActivityOptions(wctx, callOpts)
 	future := workflow.ExecuteActivity(ctx, name, payload)
@@ -100,12 +102,8 @@ func (c *wfContext) BackgroundActivity(name string, payload any) {
 	bgCtx, cancel := workflow.NewDisconnectedContext(c.workflowCtx)
 	workflow.Go(bgCtx, func(ctx workflow.Context) {
 		defer cancel()
-		ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-			TaskQueue: c.activityQueue,
-		})
-		future := workflow.ExecuteActivity(ctx, name, payload)
-		var ignore any
-		if err := future.Get(ctx, &ignore); err != nil {
+		future := c.activityWithContext(ctx, name, payload, actors.ActivityCallOptions{})
+		if _, err := future.Get(); err != nil {
 			if logger := c.Logger(); logger != nil {
 				logger.Error("background activity failed", "activity", name, "error", err)
 			}
@@ -128,6 +126,29 @@ func (c *wfContext) ActivityName(typeKey string) (string, bool) {
 	}
 	name, ok := c.activityNames[typeKey]
 	return name, ok
+}
+
+func mergeActivityOptions(base, override actors.ActivityCallOptions) actors.ActivityCallOptions {
+	out := base
+	if override.ScheduleToClose > 0 {
+		out.ScheduleToClose = override.ScheduleToClose
+	}
+	if override.ScheduleToStart > 0 {
+		out.ScheduleToStart = override.ScheduleToStart
+	}
+	if override.StartToClose > 0 {
+		out.StartToClose = override.StartToClose
+	}
+	if override.Heartbeat > 0 {
+		out.Heartbeat = override.Heartbeat
+	}
+	if hasRetryConfig(override.Retry) {
+		out.Retry = override.Retry
+	}
+	if strings.TrimSpace(override.TaskQueue) != "" {
+		out.TaskQueue = strings.TrimSpace(override.TaskQueue)
+	}
+	return out
 }
 func (c *wfContext) Logger() actors.Logger {
 	if c.logger == nil {
