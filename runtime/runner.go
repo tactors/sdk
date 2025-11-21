@@ -48,3 +48,11 @@ func (r *Runner) Activities() map[string]interface{} {
 func (r *Runner) Description() *actors.Description {
 	return r.desc.Clone()
 }
+
+// AddActivityObserver registers a hook invoked with merged activity call options before execution.
+func (r *Runner) AddActivityObserver(observer func(string, actors.ActivityCallOptions)) {
+	if observer == nil {
+		return
+	}
+	r.desc.ActivityObservers = append(r.desc.ActivityObservers, observer)
+}

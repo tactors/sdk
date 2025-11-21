@@ -39,6 +39,12 @@ consume—no reflection, code generation, or `interface{}` plumbing.
 - **Already on Temporal?** Jump to [`docs/INDEX.md`](docs/INDEX.md) for a Temporal-first map,
   mental model, and porting guide.
 
+## Testkit quick use
+
+- `testkit.ActorTemporalScenario` runs your actors against Temporal’s testsuite. Stub activities inline with `WhenActivity`:
+  infer the route from a typed func signature (`WhenActivity(func(ctx context.Context, payload MyActivity) (Resp, error) { ... })`) or pass an explicit name (`WhenActivity("sendEmail", fn)`).
+- Assert merged activity options (defaults + per-call overrides) with `ExpectActivityOptions` or `ExpectActivityOptionsForPayload`—timeouts, retry, and task queue from the runtime are captured before execution.
+
 ## Temporal runtime at a glance
 
 - `runtime` registers workflows and activities directly from an actor description, mapping

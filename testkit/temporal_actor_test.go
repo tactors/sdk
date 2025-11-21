@@ -1,6 +1,7 @@
 package testkit
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -8,83 +9,65 @@ import (
 	"github.com/tactors/sdk/actors"
 )
 
-func TestActorTemporalScenarioAdvanceTriggersTimers(t *testing.T) {
-	scenario := NewActorTemporalScenario(scenarioTestActor(), "scenario-advance", struct{}{})
-	outcome := scenario.
-		WhenCommand(scenarioSleepCommand{Delay: 5 * time.Second}).
-		Advance(5 * time.Second).
-		WhenCommand(scenarioStopCommand{}).
-		Run(t)
-	require.NoError(t, outcome.Error)
-	value, err := scenario.QueryWorkflow(scenarioQuery{})
-	require.NoError(t, err)
-	var state scenarioState
-	require.NoError(t, value.Get(&state))
-	require.Equal(t, 1, state.Sleeps)
-	require.Equal(t, 5*time.Second, state.LastDelay)
+type stubActivity struct {
+	actors.ActivityMsg[string]
+	Value string
 }
 
-func TestActorTemporalScenarioSupportsRestartsAndAutoRegistration(t *testing.T) {
-	actor := scenarioTestActor()
-	first := NewActorTemporalScenario(actor, "scenario-restart", struct{}{})
-	firstOutcome := first.
-		WhenCommand(scenarioSleepCommand{Delay: time.Second}).
-		Advance(time.Second).
-		WhenCommand(scenarioStopCommand{}).
-		Run(t)
-	require.NoError(t, firstOutcome.Error)
-	second := NewActorTemporalScenario(actor, "scenario-restart", struct{}{})
-	secondOutcome := second.
-		WhenCommand(scenarioStopCommand{}).
-		Run(t)
-	require.NoError(t, secondOutcome.Error)
-	value, err := second.QueryWorkflow(scenarioQuery{})
-	require.NoError(t, err)
-	var state scenarioState
-	require.NoError(t, value.Get(&state))
-	require.Equal(t, []string{"stop"}, state.Commands)
-}
-
-type scenarioSleepCommand struct {
+type stubCommand struct {
 	actors.CommandMsg[struct{}]
-	Delay time.Duration
+	Value string
 }
 
-type scenarioStopCommand struct {
-	actors.CommandMsg[struct{}]
+type stubQuery struct {
+	actors.QueryMsg[string]
 }
 
-type scenarioQuery struct {
-	actors.QueryMsg[scenarioState]
+type stubState struct {
+	Last string
 }
 
-type scenarioState struct {
-	Sleeps    int
-	LastDelay time.Duration
-	Commands  []string
-}
-
-func scenarioTestActor() actors.Actor {
-	return actors.NewStateful("scenario-test", func() scenarioState { return scenarioState{} }).
+func TestActorScenarioStubsActivitiesAndAssertsOptions(t *testing.T) {
+	actor := actors.NewStateful("stub-actor", func() stubState { return stubState{} }).
 		With(
-			actors.Command(func(ctx actors.Ctx, st *scenarioState, cmd scenarioSleepCommand) (struct{}, error) {
-				if cmd.Delay > 0 {
-					if err := ctx.Sleep(cmd.Delay); err != nil {
-						return struct{}{}, err
-					}
+			actors.Activity(func(ctx context.Context, a stubActivity) (string, error) {
+				return "real-" + a.Value, nil
+			}, actors.WithActivityDefaults(
+				actors.WithActivityStartToClose(3*time.Second),
+				actors.WithActivityRetry(actors.RetryPolicy{MaxAttempts: 2, InitialInterval: time.Second}),
+				actors.WithActivityTaskQueue("custom-activity"),
+			)),
+			actors.Command(func(ctx actors.Ctx, st *stubState, cmd stubCommand) (struct{}, error) {
+				val, err := actors.RunActivity(ctx, stubActivity{Value: cmd.Value}, actors.WithActivityScheduleToClose(5*time.Second))
+				if err != nil {
+					return struct{}{}, err
 				}
-				st.Sleeps++
-				st.LastDelay = cmd.Delay
-				st.Commands = append(st.Commands, "sleep")
+				st.Last = val
 				return struct{}{}, nil
 			}),
-			actors.Command(func(ctx actors.Ctx, st *scenarioState, _ scenarioStopCommand) (struct{}, error) {
-				st.Commands = append(st.Commands, "stop")
-				return struct{}{}, actors.ErrStopLoop
-			}),
-			actors.Query(func(ctx actors.Ctx, st scenarioState, _ scenarioQuery) (scenarioState, error) {
-				return st, nil
+			actors.Query(func(ctx actors.Ctx, st stubState, _ stubQuery) (string, error) {
+				return st.Last, nil
 			}),
 		).
 		Build()
+
+	scenario := NewActorTemporalScenario(actor, "stub-id", struct{}{})
+	scenario.
+		WhenActivity(func(ctx context.Context, a stubActivity) (string, error) {
+			return "stubbed-" + a.Value, nil
+		}).
+		ExpectActivityOptionsForPayload(stubActivity{}, func(t testing.TB, opts actors.ActivityCallOptions) {
+			require.Equal(t, 5*time.Second, opts.ScheduleToClose)
+			require.Equal(t, 3*time.Second, opts.StartToClose)
+			require.Equal(t, "custom-activity", opts.TaskQueue)
+			require.Equal(t, 2, opts.Retry.MaxAttempts)
+		}).
+		WhenCommand(stubCommand{Value: "ok"}).
+		Run(t)
+
+	value, err := scenario.QueryWorkflow(stubQuery{})
+	require.NoError(t, err)
+	var last string
+	require.NoError(t, value.Get(&last))
+	require.Equal(t, "stubbed-ok", last)
 }

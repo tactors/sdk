@@ -29,30 +29,31 @@ var (
 )
 
 type wfContext struct {
-	workflowCtx      workflow.Context
-	ref              actors.Ref
-	logger           actors.Logger
-	parent           actors.Ref
-	childSeq         int
-	querySeq         int
-	queryWaiters     map[string]workflow.Channel
-	askSeq           int
-	askWaiters       map[string]workflow.Channel
-	continueSeq      int
-	continueWaiters  map[string]workflow.Channel
-	shouldStop       bool
-	activityDecoders map[string]func(any) (any, error)
-	activityDefaults map[string]actors.ActivityCallOptions
-	activityQueue    string
-	activityNames    map[string]string
-	messageMeta      actors.MessageMetadata
-	correlation      actors.CorrelationData
-	messageSeq       int
-	callSeq          int
-	effects          map[string]effectEntry
-	tracer           observability.Tracer
-	snapshotInfo     actors.SnapshotInfo
-	queryCache       map[string]map[string]queryCacheEntry
+	workflowCtx       workflow.Context
+	ref               actors.Ref
+	logger            actors.Logger
+	parent            actors.Ref
+	childSeq          int
+	querySeq          int
+	queryWaiters      map[string]workflow.Channel
+	askSeq            int
+	askWaiters        map[string]workflow.Channel
+	continueSeq       int
+	continueWaiters   map[string]workflow.Channel
+	shouldStop        bool
+	activityDecoders  map[string]func(any) (any, error)
+	activityDefaults  map[string]actors.ActivityCallOptions
+	activityQueue     string
+	activityObservers []func(string, actors.ActivityCallOptions)
+	activityNames     map[string]string
+	messageMeta       actors.MessageMetadata
+	correlation       actors.CorrelationData
+	messageSeq        int
+	callSeq           int
+	effects           map[string]effectEntry
+	tracer            observability.Tracer
+	snapshotInfo      actors.SnapshotInfo
+	queryCache        map[string]map[string]queryCacheEntry
 }
 
 func (c *wfContext) ActorID() string { return c.ref.ID }
@@ -78,6 +79,11 @@ func (c *wfContext) ActivityWithOptions(name string, payload any, opts actors.Ac
 
 func (c *wfContext) activityWithContext(wctx workflow.Context, name string, payload any, opts actors.ActivityCallOptions) actors.ActivityFuture {
 	merged := mergeActivityOptions(c.activityDefaults[name], opts)
+	if len(c.activityObservers) > 0 {
+		for _, obs := range c.activityObservers {
+			obs(name, merged)
+		}
+	}
 	// honor the activity queue provided by workflow/session context
 	taskQueue := merged.TaskQueue
 	if taskQueue == "" {

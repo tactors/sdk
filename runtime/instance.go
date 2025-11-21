@@ -161,14 +161,15 @@ func (i *temporalInstance) buildWorkflowContext(ctx workflow.Context, id string,
 	}
 	i.initialPayload = init
 	wfCtx := &wfContext{
-		workflowCtx:      ctx,
-		ref:              ref,
-		parent:           parent,
-		activityDecoders: i.desc.ActivityDecoders(),
-		activityDefaults: i.desc.ActivityDefaults(),
-		activityNames:    i.desc.ActivityNames,
-		activityQueue:    activityQueueFor(i.desc.Kind, i.desc),
-		tracer:           observability.ActiveTracer(),
+		workflowCtx:       ctx,
+		ref:               ref,
+		parent:            parent,
+		activityDecoders:  i.desc.ActivityDecoders(),
+		activityDefaults:  i.desc.ActivityDefaults(),
+		activityObservers: i.desc.ActivityObservers,
+		activityNames:     i.desc.ActivityNames,
+		activityQueue:     activityQueueFor(i.desc.Kind, i.desc),
+		tracer:            observability.ActiveTracer(),
 	}
 	if i.desc.SnapshotEvery > 0 {
 		wfCtx.snapshotInfo.Enabled = true

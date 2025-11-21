@@ -19,27 +19,28 @@ type Actor interface {
 // Description is a runtime-agnostic schema the builder emits. It deliberately avoids
 // reflection-friendly types so runtimes can stay in the typed world.
 type Description struct {
-	Kind             string
-	VersionTag       string
-	Timeout          time.Duration
-	Retry            RetryPolicy
-	SignalTimeouts   map[string]time.Duration
-	WorkflowQueue    string
-	ActivityQueue    string
-	StateFactory     func() any
-	Start            StartHandler
-	Commands         map[string]CommandSpec
-	Queries          map[string]QuerySpec
-	Activities       map[string]ActivitySpec
-	activityDecoders map[string]func(any) (any, error)
-	ActivityTypes    map[string]string
-	ActivityResults  map[string]string
-	ActivityNames    map[string]string
-	CommandTypes     map[string]string
-	QueryTypes       map[string]string
-	Patches          map[string]PatchSpec
-	SnapshotEvery    int
-	SnapshotArgs     func(any) (any, error)
+	Kind              string
+	VersionTag        string
+	Timeout           time.Duration
+	Retry             RetryPolicy
+	SignalTimeouts    map[string]time.Duration
+	WorkflowQueue     string
+	ActivityQueue     string
+	StateFactory      func() any
+	Start             StartHandler
+	Commands          map[string]CommandSpec
+	Queries           map[string]QuerySpec
+	Activities        map[string]ActivitySpec
+	activityDecoders  map[string]func(any) (any, error)
+	ActivityTypes     map[string]string
+	ActivityResults   map[string]string
+	ActivityNames     map[string]string
+	ActivityObservers []func(string, ActivityCallOptions)
+	CommandTypes      map[string]string
+	QueryTypes        map[string]string
+	Patches           map[string]PatchSpec
+	SnapshotEvery     int
+	SnapshotArgs      func(any) (any, error)
 }
 
 // RetryPolicy captures a handful of knobs all runtimes typically expose.
@@ -618,6 +619,10 @@ func (d *Description) clone() *Description {
 		for k, v := range d.ActivityResults {
 			out.ActivityResults[k] = v
 		}
+	}
+	if d.ActivityObservers != nil {
+		out.ActivityObservers = make([]func(string, ActivityCallOptions), len(d.ActivityObservers))
+		copy(out.ActivityObservers, d.ActivityObservers)
 	}
 	if d.ActivityNames != nil {
 		out.ActivityNames = make(map[string]string, len(d.ActivityNames))
