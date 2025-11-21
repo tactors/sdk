@@ -23,7 +23,8 @@ reference once you have skimmed the [Getting Started](GETTING_STARTED.md) guide.
    `With(...)` chain. Handlers receive `actors.Ctx`, the state pointer (or value for queries), and
    the typed message.
 4. Finish with `.Build()` to produce an `actors.Actor`. Everything downstream (the Temporal runtime
-   and the testsuite-backed testkit) works from that description.
+   and the testsuite-backed testkit) works from that description—only `%T` formatting is used to
+   label types; no other runtime reflection is needed.
 
 ### Temporal translation at a glance
 

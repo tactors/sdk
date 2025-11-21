@@ -713,7 +713,7 @@ func expectPtr[T any](value any) (*T, error) {
 	}
 	ptr, ok := value.(*T)
 	if !ok {
-		return nil, fmt.Errorf("expected state *%s, got %T", typeName[T](), value)
+		return nil, fmt.Errorf("expected state *%s, got %T", TypeName[T](), value)
 	}
 	return ptr, nil
 }
@@ -730,9 +730,14 @@ func expectValue[T any](value any) (T, error) {
 	return zero, fmt.Errorf("expected state %T, got %T", zero, value)
 }
 
-func typeName[T any]() string {
+// TypeName returns the fully qualified name of the supplied type parameter.
+func TypeName[T any]() string {
 	var zero T
-	return fmt.Sprintf("%T", zero)
+	return typeString(zero)
+}
+
+func typeString(value any) string {
+	return fmt.Sprintf("%T", value)
 }
 
 func payloadFactory[T any]() func() any {
@@ -783,16 +788,16 @@ func TypeKeyOf(value any) string {
 	if value == nil {
 		return ""
 	}
-	return fmt.Sprintf("%T", value)
+	return typeString(value)
 }
 
 // Start lifts a typed init function into an action the builder understands.
 func Start[S any, P any](fn func(Ctx, P) (S, error)) StartAction[S] {
 	return StartAction[S]{
 		handler: StartHandler{
-			Input:          typeName[P](),
+			Input:          TypeName[P](),
 			payloadFactory: payloadFactory[P](),
-			decodePayload:  payloadDecoder[P](typeName[P]()),
+			decodePayload:  payloadDecoder[P](TypeName[P]()),
 			fn: func(ctx Ctx, payload any) (any, error) {
 				msg, err := expectType[P](payload)
 				if err != nil {
@@ -814,10 +819,10 @@ func Command[S any, Req any, Resp any](fn func(Ctx, *S, Req) (Resp, error), opts
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	reqName := typeName[Req]()
+	reqName := TypeName[Req]()
 	return CommandAction[S]{
 		name:           reqName,
-		responseType:   typeName[Resp](),
+		responseType:   TypeName[Resp](),
 		timeout:        cfg.timeout,
 		retry:          cfg.retry,
 		validator:      cfg.validator,
@@ -851,10 +856,10 @@ func Query[S any, Req any, Resp any](fn func(Ctx, S, Req) (Resp, error), opts ..
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	reqName := typeName[Req]()
+	reqName := TypeName[Req]()
 	return QueryAction[S]{
 		name:           reqName,
-		responseType:   typeName[Resp](),
+		responseType:   TypeName[Resp](),
 		cacheTTL:       cfg.cacheTTL,
 		payloadFactory: payloadFactory[Req](),
 		decodePayload:  payloadDecoder[Req](reqName),
@@ -882,15 +887,15 @@ func QueryFunc[S any, Req TypedQueryMessage[Resp], Resp any](fn func(Ctx, S, Req
 
 // Activity registers a typed activity using the payload type as the route name.
 func Activity[P any, R any](fn func(context.Context, P) (R, error), opts ...ActivityOption[any]) ActivityAction[any] {
-	return ActivityNamed(typeName[P](), fn, opts...)
+	return ActivityNamed(TypeName[P](), fn, opts...)
 }
 
 // ActivityNamed registers an activity with an explicit name.
 func ActivityNamed[P any, R any](name string, fn func(context.Context, P) (R, error), opts ...ActivityOption[any]) ActivityAction[any] {
 	action := ActivityAction[any]{
 		name:         strings.TrimSpace(name),
-		requestType:  typeName[P](),
-		responseType: typeName[R](),
+		requestType:  TypeName[P](),
+		responseType: TypeName[R](),
 		decodeResult: func(val any) (any, error) {
 			if val == nil {
 				var zero R
@@ -910,13 +915,13 @@ func ActivityNamed[P any, R any](name string, fn func(context.Context, P) (R, er
 			return out, nil
 		},
 		fn: func(ctx context.Context, payload any) (any, error) {
-			decoded, err := payloadDecoder[P](typeName[P]())(payload)
+			decoded, err := payloadDecoder[P](TypeName[P]())(payload)
 			if err != nil {
 				return nil, err
 			}
 			msg, ok := decoded.(P)
 			if !ok {
-				return nil, fmt.Errorf("expected payload %s, got %T", typeName[P](), decoded)
+				return nil, fmt.Errorf("expected payload %s, got %T", TypeName[P](), decoded)
 			}
 			return fn(ctx, msg)
 		},
@@ -945,7 +950,7 @@ func ActivityNoResultNamed[P any](name string, fn func(context.Context, P) error
 
 // ActivityAuto registers an activity using the payload type as the route name.
 func ActivityAuto[P any, R any](fn func(context.Context, P) (R, error)) ActivityAction[any] {
-	return ActivityNamed(typeName[P](), fn)
+	return ActivityNamed(TypeName[P](), fn)
 }
 
 // ActivityNoResultAuto registers a no-result activity using the payload type as the route name.

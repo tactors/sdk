@@ -31,8 +31,9 @@ _ = os.WriteFile("diag/greeter.json", payload, 0o644)
   and `actors.RegisterDescription` install actors into the default registry, while `actors.LookupDescription`
   and `actors.RegisteredActors()` provide read-only views for tooling.
 - The Temporal runtime calls `actors.RegisterDescription` automatically when a runner is created, so
-  control planes can enumerate registered kinds without reflection. You can also swap the global
-  registry by calling `actors.SetDefaultRegistry(customRegistry)` from tests or bespoke hosts.
+  control planes can enumerate registered kinds without custom reflection (we only rely on `%T`
+  formatting for type names). You can also swap the global registry by calling
+  `actors.SetDefaultRegistry(customRegistry)` from tests or bespoke hosts.
 - Use the registry to keep external discovery services in sync _without_ touching the runtime
   internals: register descriptions when a worker starts and remove them when the worker stops.
 

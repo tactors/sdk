@@ -16,8 +16,8 @@ import (
 
 func TestBuildSnapshotDrainsSignals(t *testing.T) {
 	desc := buildTestDescription()
-	doubleName := commandNameOf[doubleReq]()
-	rawName := commandNameOf[rawReq]()
+	doubleName := actors.TypeName[doubleReq]()
+	rawName := actors.TypeName[rawReq]()
 	doubleSpec := desc.Commands[doubleName]
 	doubleSpec.DecodePayload = func(val any) (any, error) {
 		switch typed := val.(type) {
@@ -106,7 +106,7 @@ func TestBuildSnapshotNoPendingSignals(t *testing.T) {
 func TestBuildSnapshotLargeBacklog(t *testing.T) {
 	desc := buildTestDescription()
 	inst := newTemporalInstance(desc)
-	doubleName := commandNameOf[doubleReq]()
+	doubleName := actors.TypeName[doubleReq]()
 	want := 64
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
@@ -151,8 +151,8 @@ func totalPendingSignals(chans map[string]workflow.ReceiveChannel) int {
 
 func TestReplaySnapshotSignalsInvokesHandlers(t *testing.T) {
 	desc := buildTestDescription()
-	doubleName := commandNameOf[doubleReq]()
-	rawName := commandNameOf[rawReq]()
+	doubleName := actors.TypeName[doubleReq]()
+	rawName := actors.TypeName[rawReq]()
 	inst := newTemporalInstance(desc)
 	signals := []snapshotSignal{
 		{Name: doubleName, Payload: mustMarshal(t, doubleReq{Value: 2})},
@@ -186,7 +186,7 @@ func TestReplaySnapshotSignalsInvokesHandlers(t *testing.T) {
 func TestReplaySnapshotSignalsPreservesOrder(t *testing.T) {
 	desc := buildTestDescription()
 	inst := newTemporalInstance(desc)
-	doubleName := commandNameOf[doubleReq]()
+	doubleName := actors.TypeName[doubleReq]()
 	const total = 32
 	signals := make([]snapshotSignal, 0, total)
 	for i := 0; i < total; i++ {
@@ -262,11 +262,6 @@ type doubleReq struct {
 
 type rawReq struct {
 	Value int
-}
-
-func commandNameOf[T any]() string {
-	var zero T
-	return fmt.Sprintf("%T", zero)
 }
 
 func TestSnapshotAndContinueUsesOverride(t *testing.T) {

@@ -17,7 +17,8 @@ following while the SDK stabilizes.
 
 ## Coding guidelines
 
-- Keep APIs typed and fluent—reach for builders instead of reflection.
+- Keep APIs typed and fluent—reach for builders instead of reflection (beyond the `%T` formatting we
+  already use for type names).
 - Surface runtime features via composition (`WithSnapshot`, `actors.Patch`, typed error helpers)
   rather than hidden magic.
 - Temporal runtime code lives under `runtime`, keeping the shared builder, testkit, and

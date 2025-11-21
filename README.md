@@ -2,7 +2,8 @@
 
 Tactors is a typed, builder-first actor SDK for Go. You describe state, handlers, activities, and
 runtime knobs in one fluent API and receive a deterministic actor description that every runtime can
-consume—no reflection, code generation, or `interface{}` plumbing.
+consume—no code generation or `interface{}` plumbing. We still touch Go’s `%T` formatting to label
+types, but handler routing stays strongly typed.
 
 ## What you get
 

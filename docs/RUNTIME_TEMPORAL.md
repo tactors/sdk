@@ -11,7 +11,8 @@ covers how it is wired together and what knobs you can use.
 - When a runner registers a workflow, the actor kind becomes the Temporal workflow type. Activities
   declared via `actors.Activity` are registered verbatim so you can attach them to any worker.
 - Because runners operate purely on descriptions, the exact same actor works with the Temporal
-  runtime and the deterministic testsuite without reflection. The SDK is intentionally Temporal-first.
+  runtime and the deterministic testsuite without runtime reflection beyond `%T` formatting used to
+  label types. The SDK is intentionally Temporal-first.
 
 ## Worker registration and queues
 
@@ -187,5 +188,5 @@ The runtime owns these signals—avoid defining your own handlers under the same
 ## Extensibility
 
 Everything flows through `actors.Description`, so the Temporal runtime and testsuite reuse the same
-typed schema without reflection. While the architecture could support other backends, the project
-focuses exclusively on Temporal.
+typed schema without reflection beyond `%T` formatting for names. While the architecture could
+support other backends, the project focuses exclusively on Temporal.

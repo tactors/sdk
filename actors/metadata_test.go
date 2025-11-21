@@ -30,7 +30,7 @@ type logActivity struct {
 }
 
 func TestDescriptionMetadata(t *testing.T) {
-	commandName := fmt.Sprintf("%T", incrementCommand{})
+	commandName := actors.TypeName[incrementCommand]()
 	retry := actors.RetryPolicy{MaxAttempts: 9, InitialInterval: 2 * time.Second, BackoffCoefficient: 1.5}
 	actor := actors.NewStateful("meta", func() metadataState { return metadataState{} }).
 		WithVersionTag("v1.2.3").
