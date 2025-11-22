@@ -30,8 +30,8 @@ types, but handler routing stays strongly typed.
    option plus helpers for activities, child workflows, and cross-actor calls.
 3. **Launch workers.** [`docs/RUNTIME_TEMPORAL.md`](docs/RUNTIME_TEMPORAL.md) covers queue naming,
    worker registration, ask/query plumbing, and Continue-As-New behavior.
-4. **Study real code.** [`docs/EXAMPLES.md`](docs/EXAMPLES.md) lists the runnable samples under
-   `examples/`, each wired directly into the Temporal testsuite.
+4. **Study real code.** [`docs/EXAMPLES.md`](docs/EXAMPLES.md) points to the runnable samples in the
+   separate `github.com/tactors/samples` repo, each wired directly into the Temporal testsuite.
 5. **Want to help?** [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) captures the development workflow
    and roadmap ideas.
 6. **Diagnostics & control.** [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) explains metadata export,
@@ -63,10 +63,9 @@ types, but handler routing stays strongly typed.
 - `actors/` – builder, typed helpers, and shared primitives.
 - `runtime/` – Temporal runner plus typed client utilities.
 - `testkit/` – deterministic harnesses (Temporal scenario and testing helpers).
-- `examples/` – runnable samples referenced throughout the docs.
 - `observability/` – pluggable tracing/metrics hooks; `internal/` – supporting packages as we flesh
   out tooling.
-- More end-to-end samples live in the sibling repo: https://github.com/tactors/samples.
+- Samples now live in the sibling repo: https://github.com/tactors/samples.
 
 ## Testing
 

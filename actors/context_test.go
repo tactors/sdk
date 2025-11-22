@@ -404,6 +404,21 @@ func TestPatchHelper(t *testing.T) {
 	}
 }
 
+func TestPatchDefaultOff(t *testing.T) {
+	ctx := &stubCtx{}
+	if actors.PatchDefaultOff(ctx, "change-off") {
+		t.Fatalf("expected patch default-off to be disabled")
+	}
+	if ctx.versionChangeID != "change-off" {
+		t.Fatalf("version change id not recorded for default-off")
+	}
+	defaultVersion := 1
+	ctx.versionOverride = &defaultVersion
+	if !actors.PatchDefaultOff(ctx, "change-on") {
+		t.Fatalf("expected patch default-off to return true when version overrides")
+	}
+}
+
 func TestSpawnHelper(t *testing.T) {
 	ctx := &stubCtx{spawnRef: actors.Ref{Kind: "child", ID: "child-42"}}
 	ref, err := actors.Spawn(ctx, "child", struct{}{}, actors.WithChildName("child-42"))

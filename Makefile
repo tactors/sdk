@@ -1,16 +1,7 @@
-.PHONY: greeter telegram orders hello
+.PHONY: examples
 
-greeter:
-	cd examples/greeter && go run .
-
-telegram:
-	cd examples/telegram && go run .
-
-orders:
-	cd examples/orders && go run .
-
-hello:
-	cd examples/hello-system && go run .
-
-ticketing:
-	cd examples/ticketing && go run .
+# Examples have moved to github.com/tactors/samples. Run them from that repo:
+#   GOCACHE=$(pwd)/.gocache go test ./examples/greeter
+#   GOCACHE=$(pwd)/.gocache go test ./examples/control
+examples:
+	@echo "Examples live in https://github.com/tactors/samples (see docs/EXAMPLES.md)"

@@ -200,6 +200,14 @@ func Patch(ctx Ctx, changeID string) bool {
 	return ctx.Version(changeID, DefaultVersion, 0) != DefaultVersion
 }
 
+// PatchDefaultOff mirrors Patch but returns false when ctx is nil or the runtime reports DefaultVersion.
+func PatchDefaultOff(ctx Ctx, changeID string) bool {
+	if ctx == nil {
+		return false
+	}
+	return ctx.Version(changeID, DefaultVersion, DefaultVersion) != DefaultVersion
+}
+
 // Logger is the minimal logging surface actors need. Runtimes can adapt their logger of choice.
 type Logger interface {
 	Debug(msg string, kv ...any)

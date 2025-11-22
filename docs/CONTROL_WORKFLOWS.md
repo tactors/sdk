@@ -44,6 +44,6 @@ func registryActor() actors.Actor {
 - **Surface patch guards.** When rolling out new maintenance logic, declare patches via
   `builder.DeclarePatch("my-change", false)` and gate code using `actors.Patch(ctx, "my-change")`.
   The diagnostics queries make it easy to audit which workers have flipped the patch.
-- **Study the sample.** [`examples/control`](../examples/control) contains a runnable Temporal
-  scenario that exercises `control.AwaitInterval`, snapshotting, and the standard stop-command
-  pattern.
+- **Study the sample.** [`examples/control`](https://github.com/tactors/samples/tree/main/examples/control)
+  contains a runnable Temporal scenario that exercises `control.AwaitInterval`, snapshotting, and the
+  standard stop-command pattern.

@@ -127,9 +127,9 @@ process expired messages, making it easier to propagate TTLs and back-pressure a
 
 ## Examples worth studying
 
-- `examples/spawn` – long-lived and one-shot children, `Tell`, and `QueryActor` across workflows.
-- `examples/telegram` – per-command retries, activities, ask/query plumbing, and a Temporal test.
-- `examples/orders`, `examples/ticketing`, `examples/hello-system` – smaller actors focused on state
+- `github.com/tactors/samples/examples/spawn` – long-lived and one-shot children, `Tell`, and `QueryActor` across workflows.
+- `github.com/tactors/samples/examples/telegram` – per-command retries, activities, ask/query plumbing, and a Temporal test.
+- `github.com/tactors/samples/examples/orders`, `.../ticketing`, `.../hello-system` – smaller actors focused on state
   mutation, caching, and typed clients.
 - `cmd/worker` – a minimal worker binary that wires multiple actors into Temporal queues.
 

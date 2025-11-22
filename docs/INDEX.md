@@ -22,6 +22,8 @@ For teams already running Temporal. Start here if you know signals/queries/Conti
 ## Fast Commands
 
 ```bash
+git clone https://github.com/tactors/samples.git
+cd samples  # github.com/tactors/samples
 GOCACHE=$(pwd)/.gocache go test ./examples/greeter   # smallest actor, Temporal testsuite
 GOCACHE=$(pwd)/.gocache go test ./examples/spawn     # child workflows, Tell/Ask/QueryActor
 GOCACHE=$(pwd)/.gocache go test ./examples/control   # durable cadence + snapshots
