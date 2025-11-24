@@ -7,56 +7,44 @@ types, but handler routing stays strongly typed.
 
 ## What you get
 
-- **Typed actors front to back.** `actors.NewStateful("kind", func() MyState { ... })` fixes the state
-  type; commands, queries, and activities embed helper structs (`actors.CommandMsg`, `actors.QueryMsg`,
-  `actors.ActivityMsg`) so handlers receive real Go types with no manual decoding.
-- **Declarative behavior.** Add retries, timeouts, caches, queue overrides, and snapshots with fluent
-  helpers such as `actors.WithTimeout`, `actors.WithRetry`, `actors.WithCache`, `WithWorkflowQueue`,
-  and `WithSnapshot`.
-- **Temporal-first runtime.** Builders emit an `actors.Description` record that the Temporal runtime
-  and testsuite harness consume directly. No additional runtimes are planned—the SDK is focused on
-  Temporal end to end.
-- **Built-in observability.** Command handlers plus cross-actor `Ask`/`Query` calls emit spans and
-  metrics via the `observability` hooks so any framework can connect OpenTelemetry or other backends
-  without custom adapters.
-- **Cross-actor tooling.** Spawn long-lived or one-shot children, send typed commands across actors,
-  force rotations via `actors.RequestContinueAsNew`, and gate upgrades via `actors.Patch` by default.
+- Typed actor builders: fix state with `actors.NewStateful`, get typed commands/queries/activities
+  via helper embeds, and build once for every runtime consumer.
+- Declarative knobs: retries, timeouts, caches, queue overrides, snapshots, and validators live on
+  the builder so intent is obvious.
+- Temporal-first runtime: one `actors.Description` powers worker registration, Ask/Query plumbing,
+  and the deterministic testsuite—no alt runtimes or codegen.
+- Ops hooks: spans/metrics around commands and cross-actor calls; rotation/versioning via
+  `WithSnapshot` and `actors.Patch`.
 
-## Newcomer path
+## Quick start
 
-1. **Read the walkthrough.** [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) shows the minimum
-   actor, how to exercise it inside the Temporal testsuite, and how to wire a Temporal worker.
-2. **Explore the builder.** [`docs/ACTOR_BUILDER.md`](docs/ACTOR_BUILDER.md) explains every `With(...)`
-   option plus helpers for activities, child workflows, and cross-actor calls.
-3. **Launch workers.** [`docs/RUNTIME_TEMPORAL.md`](docs/RUNTIME_TEMPORAL.md) covers queue naming,
-   worker registration, ask/query plumbing, and Continue-As-New behavior.
-4. **Study real code.** [`docs/EXAMPLES.md`](docs/EXAMPLES.md) points to the runnable samples in the
-   separate `github.com/tactors/samples` repo, each wired directly into the Temporal testsuite.
-5. **Want to help?** [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) captures the development workflow
-   and roadmap ideas.
-6. **Diagnostics & control.** [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) explains metadata export,
-   registry access, patch/snapshot queries, and worker health. [`docs/CONTROL_WORKFLOWS.md`](docs/CONTROL_WORKFLOWS.md)
-   covers deterministic interval helpers for maintenance actors.
-- **Already on Temporal?** Jump to [`docs/INDEX.md`](docs/INDEX.md) for a Temporal-first map,
-  mental model, and porting guide.
+1) New to the ecosystem? Read [`docs/NEW_TO_TEMPORAL.md`](docs/NEW_TO_TEMPORAL.md) and
+   [`docs/NEW_TO_ACTORS.md`](docs/NEW_TO_ACTORS.md) for the quick primers.
+2) Build the smallest actor in [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) and run it
+   against the Temporal testsuite (`go test`).
+3) Browse runnable samples in [`docs/EXAMPLES.md`](docs/EXAMPLES.md) (code lives at
+   https://github.com/tactors/samples).
+
+## Docs map
+
+- Builder reference: [`docs/ACTOR_BUILDER.md`](docs/ACTOR_BUILDER.md).
+- Runtime/worker behavior: [`docs/RUNTIME_TEMPORAL.md`](docs/RUNTIME_TEMPORAL.md).
+- Temporal-first map: [`docs/INDEX.md`](docs/INDEX.md) and [`docs/TEMPORAL_MENTAL_MODEL.md`](docs/TEMPORAL_MENTAL_MODEL.md).
+- Ops & maintenance: [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) and [`docs/CONTROL_WORKFLOWS.md`](docs/CONTROL_WORKFLOWS.md).
+- Contributing: [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md).
 
 ## Testkit quick use
 
-- `testkit.ActorTemporalScenario` runs your actors against Temporal’s testsuite. Stub activities inline with `WhenActivity`:
-  infer the route from a typed func signature (`WhenActivity(func(ctx context.Context, payload MyActivity) (Resp, error) { ... })`) or pass an explicit name (`WhenActivity("sendEmail", fn)`).
-- Assert merged activity options (defaults + per-call overrides) with `ExpectActivityOptions` or `ExpectActivityOptionsForPayload`—timeouts, retry, and task queue from the runtime are captured before execution.
+- `testkit.ActorTemporalScenario` runs actors against Temporal’s testsuite. Stub activities inline
+  with `WhenActivity(...)`; it infers names from typed signatures or accepts explicit names.
+- Inspect merged activity options with `ExpectActivityOptions` helpers before execution.
 
 ## Temporal runtime at a glance
 
-- `runtime` registers workflows and activities directly from an actor description, mapping
-  commands to signals and queries to Temporal query handlers.
-- `runtime.NewWorkerSet` keeps one workflow and one activity worker per queue, reuses workers when
-  multiple actors share queues, and exposes `StartAll(ctx)` / `StopAll()` to manage them together.
-- History rotation happens automatically. When you configure `WithSnapshot`, the runtime Continue-As-New
-  payload carries state plus pending signals; without it, the runtime still obeys Temporal’s
-  `GetContinueAsNewSuggested()` hook and restarts with the original init payload.
-- The deterministic Temporal testsuite harness powers the `testkit` package, so code you write for
-  production is exactly what you exercise in tests—no in-memory shortcut paths.
+- `runtime` registers workflows/activities from an actor description and wires Ask/Query/Spawn to
+  Temporal signals, queries, and child workflows.
+- `runtime.NewWorkerSet` reuses workers per queue and rotates histories automatically when
+  `WithSnapshot` or `GetContinueAsNewSuggested()` triggers.
 
 ## Repository guide
 
