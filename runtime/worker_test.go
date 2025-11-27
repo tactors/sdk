@@ -137,8 +137,8 @@ func TestWorkerSetHealthSnapshot(t *testing.T) {
 	if len(snap.WorkflowQueues) != 2 {
 		t.Fatalf("expected two workflow queues, got %#v", snap.WorkflowQueues)
 	}
-	if len(snap.ActivityQueues) != 1 {
-		t.Fatalf("expected one activity queue, got %#v", snap.ActivityQueues)
+	if len(snap.ActivityQueues) != 2 {
+		t.Fatalf("expected two activity queues (one disabled), got %#v", snap.ActivityQueues)
 	}
 	for _, status := range snap.WorkflowQueues {
 		if status.Running {
@@ -153,9 +153,24 @@ func TestWorkerSetHealthSnapshot(t *testing.T) {
 		if !status.Running {
 			t.Fatalf("expected workflow queue %s running", status.Queue)
 		}
+		if status.Disabled {
+			t.Fatalf("expected workflow queue %s enabled", status.Queue)
+		}
 		if len(status.ActorKinds) == 0 {
 			t.Fatalf("workflow queue missing actor metadata: %#v", status)
 		}
+	}
+	disabledActivity := 0
+	for _, status := range snap.ActivityQueues {
+		if status.Disabled {
+			disabledActivity++
+			if status.Running {
+				t.Fatalf("expected disabled activity queue %s to stay stopped", status.Queue)
+			}
+		}
+	}
+	if disabledActivity != 1 {
+		t.Fatalf("expected one disabled activity queue, got %d", disabledActivity)
 	}
 	set.StopAll()
 	snap = set.HealthSnapshot()
@@ -178,6 +193,121 @@ func TestWorkerSetStartError(t *testing.T) {
 	err := set.StartAll(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "fail to start") {
 		t.Fatalf("expected start error, got %v", err)
+	}
+}
+
+func TestWorkerSetAutoDisablesActivityPollerForWorkflowOnlyActor(t *testing.T) {
+	stubs := map[string]*stubWorker{}
+	set := newWorkerSetWithFactory(func(queue string, opts worker.Options) temporalWorker {
+		w := &stubWorker{queue: queue, opts: opts}
+		stubs[queue] = w
+		return w
+	}, WorkerConfig{})
+	actor := actors.NewStateful("workflow-only", func() struct{} { return struct{}{} }).Build()
+
+	reg, err := set.Register(actor, WorkerConfig{})
+	if err != nil {
+		t.Fatalf("register actor: %v", err)
+	}
+	if reg.ActivityQueue != "" {
+		t.Fatalf("expected no activity queue, got %q", reg.ActivityQueue)
+	}
+	if len(set.activityWorkers) != 0 {
+		t.Fatalf("expected no activity workers, got %d", len(set.activityWorkers))
+	}
+	wf := stubs[reg.WorkflowQueue]
+	if wf == nil {
+		t.Fatalf("workflow worker not created")
+	}
+	actQueue := activityQueueFor(actor.Kind(), actor.Spec())
+	binding := set.activityBindings[actQueue]
+	if binding == nil || !binding.disabled {
+		t.Fatalf("expected activity queue %s to be marked disabled, got %#v", actQueue, binding)
+	}
+}
+
+func TestWorkerSetAutoDisablesWorkflowPollerForActivityOnlyActor(t *testing.T) {
+	stubs := map[string]*stubWorker{}
+	set := newWorkerSetWithFactory(func(queue string, opts worker.Options) temporalWorker {
+		w := &stubWorker{queue: queue, opts: opts}
+		stubs[queue] = w
+		return w
+	}, WorkerConfig{})
+	actor := actors.New("activity-only").
+		WithActivity("noop", func(ctx context.Context, _ any) (any, error) {
+			return nil, nil
+		}).
+		Build()
+
+	reg, err := set.Register(actor, WorkerConfig{})
+	if err != nil {
+		t.Fatalf("register actor: %v", err)
+	}
+	if reg.WorkflowQueue != "" {
+		t.Fatalf("expected workflow queue omitted, got %q", reg.WorkflowQueue)
+	}
+	if len(set.workflowWorkers) != 0 {
+		t.Fatalf("expected no workflow workers, got %d", len(set.workflowWorkers))
+	}
+	act := stubs[reg.ActivityQueue]
+	if act == nil {
+		t.Fatalf("activity worker not created")
+	}
+	if !act.opts.DisableWorkflowWorker {
+		t.Fatalf("activity worker should disable workflow poller, opts=%+v", act.opts)
+	}
+	wfQueue := workflowQueueFor(actor.Kind(), actor.Spec())
+	binding := set.workflowBindings[wfQueue]
+	if binding == nil || !binding.disabled {
+		t.Fatalf("expected workflow queue %s to be marked disabled, got %#v", wfQueue, binding)
+	}
+}
+
+func TestWorkerSetSharedQueueUsesSingleWorker(t *testing.T) {
+	stubs := map[string]*stubWorker{}
+	set := newWorkerSetWithFactory(func(queue string, opts worker.Options) temporalWorker {
+		w := &stubWorker{queue: queue, opts: opts}
+		stubs[queue] = w
+		return w
+	}, WorkerConfig{})
+	actor := actors.NewStateful("shared", func() struct{} { return struct{}{} }).
+		WithWorkflowQueue("shared").
+		WithActivityQueue("shared").
+		With(
+			actors.ActivityNamed("noop", func(ctx context.Context, _ struct{}) (struct{}, error) {
+				return struct{}{}, nil
+			}),
+		).
+		Build()
+
+	reg, err := set.Register(actor, WorkerConfig{})
+	if err != nil {
+		t.Fatalf("register actor: %v", err)
+	}
+	if reg.WorkflowQueue != "shared" || reg.ActivityQueue != "shared" {
+		t.Fatalf("expected shared queues, got %+v", reg)
+	}
+	wf := set.workflowWorkers["shared"]
+	act := set.activityWorkers["shared"]
+	if wf == nil || act == nil {
+		t.Fatalf("workers not created for shared queue")
+	}
+	if wf != act {
+		t.Fatalf("expected single worker instance for shared queue")
+	}
+	stub, ok := wf.(*stubWorker)
+	if !ok {
+		t.Fatalf("worker type assertion failed: %T", wf)
+	}
+	if err := set.StartAll(context.Background()); err != nil {
+		t.Fatalf("start workers: %v", err)
+	}
+	set.StopAll()
+	if stub.startCount != 1 || stub.stopCount != 1 {
+		t.Fatalf("expected single start/stop, got start=%d stop=%d", stub.startCount, stub.stopCount)
+	}
+	if len(stub.workflows) != 1 || len(stub.activities) != 1 {
+		t.Fatalf("expected both workflow and activity registration, got %+v", stub)
 	}
 }
 

@@ -104,9 +104,10 @@ const (
 type WorkerEventType string
 
 const (
-	WorkerEventStart WorkerEventType = "start"
-	WorkerEventStop  WorkerEventType = "stop"
-	WorkerEventError WorkerEventType = "error"
+	WorkerEventStart    WorkerEventType = "start"
+	WorkerEventStop     WorkerEventType = "stop"
+	WorkerEventError    WorkerEventType = "error"
+	WorkerEventDisabled WorkerEventType = "disabled"
 )
 
 // WorkerEvent describes lifecycle changes for workflow or activity workers.
@@ -115,6 +116,7 @@ type WorkerEvent struct {
 	Role       WorkerRole
 	Type       WorkerEventType
 	Error      error
+	Reason     string
 	ActorKinds []string
 }
 

@@ -16,11 +16,13 @@ import (
 )
 
 const (
-	maxPendingRequests    = 1024
-	defaultAskWaitTimeout = time.Minute
-	defaultQueryTimeout   = time.Minute
-	effectsMemoKey        = "__actors_effects"
-	queryCacheNilKey      = "__actors_query_nil_payload"
+	maxPendingRequests             = 1024
+	defaultAskWaitTimeout          = time.Minute
+	defaultQueryTimeout            = time.Minute
+	effectsMemoKey                 = "__actors_effects"
+	queryCacheNilKey               = "__actors_query_nil_payload"
+	defaultActivityStartToClose    = 30 * time.Second
+	defaultActivityScheduleToClose = 2 * time.Minute
 )
 
 var (
@@ -153,6 +155,13 @@ func mergeActivityOptions(base, override actors.ActivityCallOptions) actors.Acti
 	}
 	if strings.TrimSpace(override.TaskQueue) != "" {
 		out.TaskQueue = strings.TrimSpace(override.TaskQueue)
+	}
+	if out.StartToClose == 0 && out.ScheduleToClose == 0 {
+		out.StartToClose = defaultActivityStartToClose
+		out.ScheduleToClose = defaultActivityScheduleToClose
+	}
+	if !hasRetryConfig(out.Retry) {
+		out.Retry = actors.RetryPolicy{MaxAttempts: 1}
 	}
 	return out
 }

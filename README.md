@@ -31,6 +31,7 @@ types, but handler routing stays strongly typed.
 - Runtime/worker behavior: [`docs/RUNTIME_TEMPORAL.md`](docs/RUNTIME_TEMPORAL.md).
 - Temporal-first map: [`docs/INDEX.md`](docs/INDEX.md) and [`docs/TEMPORAL_MENTAL_MODEL.md`](docs/TEMPORAL_MENTAL_MODEL.md).
 - Ops & maintenance: [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) and [`docs/CONTROL_WORKFLOWS.md`](docs/CONTROL_WORKFLOWS.md).
+- Orchestration pattern: [`docs/ACTIVITY_FLOW_PATTERN.md`](docs/ACTIVITY_FLOW_PATTERN.md) for “actor is the graph” guidance.
 - Contributing: [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md).
 
 ## Testkit quick use
@@ -45,6 +46,12 @@ types, but handler routing stays strongly typed.
   Temporal signals, queries, and child workflows.
 - `runtime.NewWorkerSet` reuses workers per queue and rotates histories automatically when
   `WithSnapshot` or `GetContinueAsNewSuggested()` triggers.
+- Queue defaults match the actor kind (`<kind>-workflow` / `<kind>-activity`), and workers
+  auto-disable the unused role so activity-only or workflow-only actors do not need extra flags.
+  If you explicitly point both roles at the same queue and register both, one worker serves both.
+- Activity calls get safe defaults: a StartToClose of 30s and ScheduleToClose of 2m are applied if
+  you don’t set either. Override with `actors.WithActivityStartToClose` or
+  `actors.WithActivityScheduleToClose` per-call or via `WithActivityDefaults`.
 
 ## Repository guide
 

@@ -34,3 +34,19 @@ func TestMergeActivityOptions(t *testing.T) {
 		t.Fatalf("retry not overridden: %+v", merged.Retry)
 	}
 }
+
+func TestMergeActivityOptionsAppliesDefaultTimeouts(t *testing.T) {
+	base := actors.ActivityCallOptions{}
+	override := actors.ActivityCallOptions{}
+
+	merged := mergeActivityOptions(base, override)
+	if merged.StartToClose != defaultActivityStartToClose {
+		t.Fatalf("expected default start-to-close timeout, got %s", merged.StartToClose)
+	}
+	if merged.ScheduleToClose != defaultActivityScheduleToClose {
+		t.Fatalf("expected default schedule-to-close timeout, got %s", merged.ScheduleToClose)
+	}
+	if merged.Retry.MaxAttempts != 1 {
+		t.Fatalf("expected default retry policy to disable retries, got %+v", merged.Retry)
+	}
+}

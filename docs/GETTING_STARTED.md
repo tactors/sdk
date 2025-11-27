@@ -65,7 +65,11 @@ progress via query or callback).
 ## 2) Register a worker (minimal delta from Temporal)
 
 Same `client.Dial`, plus `runtime.NewWorkerSet` and `Register` with your actor. Queues default to
-`<kind>-workflow` / `<kind>-activity`.
+`<kind>-workflow` / `<kind>-activity`. Workers auto-disable the unused role: if you register only
+workflows, the activity poller stays off; if you register only activities, the workflow poller stays
+off. Startup logs note which queues are enabled or auto-disabled. If you explicitly point both
+workflow and activity roles at the same queue and register both kinds of handlers, a single worker
+services that queue.
 
 ```go
 c, err := client.Dial(client.Options{

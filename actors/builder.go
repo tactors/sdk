@@ -653,6 +653,23 @@ func (d *Description) clone() *Description {
 	return &out
 }
 
+// HasWorkflow reports whether the description includes any workflow handlers or state.
+func (d *Description) HasWorkflow() bool {
+	if d == nil {
+		return false
+	}
+	if d.StateFactory != nil || d.Start.fn != nil {
+		return true
+	}
+	if len(d.Commands) > 0 || len(d.Queries) > 0 || len(d.Patches) > 0 {
+		return true
+	}
+	if d.SnapshotEvery > 0 || d.SnapshotArgs != nil {
+		return true
+	}
+	return false
+}
+
 // Clone returns a deep copy of the description maps so runtimes can safely mutate them.
 func (d *Description) Clone() *Description {
 	return d.clone()
