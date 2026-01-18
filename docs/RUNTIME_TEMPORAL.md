@@ -59,6 +59,23 @@ if err := set.StartAll(ctx); err != nil {
 - `runtime.NewEncryptionCodec(key)` returns an AES-GCM codec that encrypts every payload before it
   is handed to Temporal. Histories, visibility records, and built-in logs store only ciphertext so
   secrets never appear in plaintext outside the worker.
+- `runtime.NewOffloadCodec(store, runtime.OffloadCodecOptions{ThresholdBytes: ...})` stores payloads
+  larger than a threshold in an external store (Redis/S3/etc.) and replaces them with lightweight
+  references. `ThresholdBytes` defaults to 256 KiB. Offloaded bytes must remain available for
+  workflow replay, and the codec applies to every payload (signals, queries, activities, snapshots),
+  so all workers and clients must share the same data converter. Temporal applies codecs last-to-
+  first on encode, so earlier codecs wrap later ones. To keep offloaded blobs encrypted, configure
+  the offload codec before the encryption codec. The codec derives deterministic keys (SHA-256 by
+  default) and passes them to the store; stores must treat `Put(key, payload)` as idempotent so
+  replays remain safe.
+- Store contract:
+
+```go
+type OffloadStore interface {
+    Put(key string, payload []byte) error
+    Get(key string) ([]byte, error)
+}
+```
 - Remember to hand the configured converter to your clients as well:
 
 ```go
@@ -72,6 +89,17 @@ cli, err := client.Dial(client.Options{
 })
 if err != nil { log.Fatal(err) }
 set := runtime.NewWorkerSet(cli)
+```
+
+To combine encryption with offload, place the offload codec first so encryption happens before
+offload storage:
+
+```go
+offload, err := runtime.NewOffloadCodec(store, runtime.OffloadCodecOptions{ThresholdBytes: 512 * 1024})
+if err != nil { log.Fatal(err) }
+codec, err := runtime.NewEncryptionCodec([]byte(os.Getenv("ACTOR_PAYLOAD_KEY")))
+if err != nil { log.Fatal(err) }
+runtime.ConfigurePayloadCodecs(offload, codec)
 ```
 
 ## Workflow lifecycle
