@@ -49,6 +49,60 @@ if err := set.StartAll(ctx); err != nil {
 <-ctx.Done()
 ```
 
+## Cross-namespace routing (opt-in)
+
+Temporal namespaces are isolation boundaries. The SDK can route actor calls across namespaces, but
+it is deliberately opt-in and uses activities for cross-namespace hops.
+
+Enable it by configuring a client pool + resolver + policy on the worker set:
+
+```go
+pool := runtime.StaticClientPool{
+    Default: "accounts",
+    Clients: map[string]runtime.TemporalClient{
+        "accounts": accountsClient,
+        "cards":    cardsClient,
+        "providers": providersClient,
+    },
+}
+resolver := runtime.KindNamespaceMap{
+    "Account":  "accounts",
+    "Card":     "cards",
+    "Provider": "providers",
+}
+policy := runtime.CrossNamespacePolicy{
+    Enabled: true,
+    Allowlist: runtime.NormalizeAllowlist(map[string][]string{
+        "accounts": {"cards", "providers"},
+        "cards":    {"accounts"},
+    }),
+}
+
+set := runtime.NewWorkerSet(accountsClient).
+    Configure(
+        runtime.WithClientPool(pool),
+        runtime.WithNamespaceResolver(resolver),
+        runtime.WithCrossNamespacePolicy(policy),
+    )
+```
+
+Notes:
+
+- `Namespace == ""` is normalized to the pool default before comparisons, so you do not
+  accidentally bridge when both sides refer to the default namespace.
+- Bridge activities execute in the caller namespace and invoke the target namespace client.
+- Cross-namespace is disabled by default, even if a pool is present; enable it explicitly via
+  `CrossNamespacePolicy.Enabled`.
+- For a minimal end-to-end snippet, see [`docs/CROSS_NAMESPACE_EXAMPLE.md`](CROSS_NAMESPACE_EXAMPLE.md).
+
+For non-actor processes (HTTP gateways, CLI tools), install the pooled client invoker so
+`actors.InvokeAsk`/`InvokeTell`/`InvokeQuery` use the same routing rules:
+
+```go
+runtime.RegisterTemporalClientPool(pool, resolver, policy)
+```
+
+## Child orchestration
 ## Payload codecs and encryption
 
 - The runtime ships with a deterministic CBOR data converter. Call `runtime.DataConverter()` to
@@ -132,6 +186,8 @@ runtime.ConfigurePayloadCodecs(offload, codec)
 - `actors.Spawn` spins up a child workflow using Temporal’s child APIs. The runtime derives workflow
   IDs or honors overrides provided through `actors.WithChildName`. The returned `actors.Ref` includes
   both the kind and instance ID for downstream `Tell`/`Ask` calls.
+- `actors.SpawnRemote` starts a workflow in another namespace (not a child). Use
+  `actors.WithSpawnNamespace` to target a specific namespace. Starts are idempotent by workflow ID.
 - `actors.SpawnOneShot` requires `actors.WithChildKind` so the runtime can find the child’s
   description. It starts a child, injects a one-shot command into the start envelope, waits for the
   workflow to finish, and unwraps the typed response.
@@ -145,6 +201,8 @@ runtime.ConfigurePayloadCodecs(offload, codec)
   workflow is spawned.
 - `actors.QueryActor` follows a similar pattern for read-only handlers using
   `__actors_query_request` / `__actors_query_reply`.
+- When a target is in a different namespace, the runtime schedules a bridge activity in the caller
+  namespace and performs the call using the target namespace client.
 - Each envelope carries the caller ref, correlation ID, and deadline. The runtime bounds the number
   of inflight exchanges and times out replies after one minute so a misbehaving callee cannot jam a
   workflow forever. Validation hooks fire before the handler executes; failures return deterministic

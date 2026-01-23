@@ -35,7 +35,7 @@ func TestBuildSnapshotDrainsSignals(t *testing.T) {
 	rawSpec := desc.Commands[rawName]
 	rawSpec.PayloadFactory = nil
 	desc.Commands[rawName] = rawSpec
-	inst := newTemporalInstance(desc)
+	inst := newTemporalInstance(desc, nil)
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
 	env.RegisterDelayedCallback(func() {
@@ -89,7 +89,7 @@ func TestBuildSnapshotDrainsSignals(t *testing.T) {
 
 func TestBuildSnapshotNoPendingSignals(t *testing.T) {
 	desc := buildTestDescription()
-	inst := newTemporalInstance(desc)
+	inst := newTemporalInstance(desc, nil)
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
 	wf := func(ctx workflow.Context) (snapshotRecord, error) {
@@ -105,7 +105,7 @@ func TestBuildSnapshotNoPendingSignals(t *testing.T) {
 
 func TestBuildSnapshotLargeBacklog(t *testing.T) {
 	desc := buildTestDescription()
-	inst := newTemporalInstance(desc)
+	inst := newTemporalInstance(desc, nil)
 	doubleName := actors.TypeName[doubleReq]()
 	want := 64
 	var suite testsuite.WorkflowTestSuite
@@ -153,7 +153,7 @@ func TestReplaySnapshotSignalsInvokesHandlers(t *testing.T) {
 	desc := buildTestDescription()
 	doubleName := actors.TypeName[doubleReq]()
 	rawName := actors.TypeName[rawReq]()
-	inst := newTemporalInstance(desc)
+	inst := newTemporalInstance(desc, nil)
 	signals := []snapshotSignal{
 		{Name: doubleName, Payload: mustMarshal(t, doubleReq{Value: 2})},
 		{Name: rawName, Payload: mustMarshal(t, rawReq{Value: 5})},
@@ -168,6 +168,7 @@ func TestReplaySnapshotSignalsInvokesHandlers(t *testing.T) {
 			activityDecoders: desc.ActivityDecoders(),
 			activityQueue:    activityQueueFor(desc.Kind, desc),
 			tracer:           observability.ActiveTracer(),
+			routing:          &namespaceRouting{},
 		}
 		state := &testCommandState{}
 		if err := inst.replaySnapshotSignals(ctx, wfCtx, state, signals); err != nil {
@@ -185,7 +186,7 @@ func TestReplaySnapshotSignalsInvokesHandlers(t *testing.T) {
 
 func TestReplaySnapshotSignalsPreservesOrder(t *testing.T) {
 	desc := buildTestDescription()
-	inst := newTemporalInstance(desc)
+	inst := newTemporalInstance(desc, nil)
 	doubleName := actors.TypeName[doubleReq]()
 	const total = 32
 	signals := make([]snapshotSignal, 0, total)
@@ -201,6 +202,7 @@ func TestReplaySnapshotSignalsPreservesOrder(t *testing.T) {
 			activityDecoders: desc.ActivityDecoders(),
 			activityQueue:    activityQueueFor(desc.Kind, desc),
 			tracer:           observability.ActiveTracer(),
+			routing:          &namespaceRouting{},
 		}
 		state := &testCommandState{}
 		if err := inst.replaySnapshotSignals(ctx, wfCtx, state, signals); err != nil {
@@ -266,7 +268,7 @@ type rawReq struct {
 
 func TestSnapshotAndContinueUsesOverride(t *testing.T) {
 	desc := buildTestDescription()
-	inst := newTemporalInstance(desc)
+	inst := newTemporalInstance(desc, nil)
 	state := &testCommandState{Sum: 7}
 	override := map[string]int{"sum": 42}
 	capturedArgs, err := runSnapshotAndContinueWorkflow(t, inst, desc, state, override)
@@ -278,7 +280,7 @@ func TestSnapshotAndContinueUsesOverride(t *testing.T) {
 
 func TestSnapshotAndContinueUsesSnapshotArgsWhenNoOverride(t *testing.T) {
 	desc := buildTestDescription()
-	inst := newTemporalInstance(desc)
+	inst := newTemporalInstance(desc, nil)
 	state := &testCommandState{Sum: 9}
 	capturedArgs, err := runSnapshotAndContinueWorkflow(t, inst, desc, state, nil)
 	require.Error(t, err)
@@ -290,7 +292,7 @@ func TestSnapshotAndContinueUsesSnapshotArgsWhenNoOverride(t *testing.T) {
 func TestSnapshotAndContinueFallsBackToInitialPayload(t *testing.T) {
 	desc := buildTestDescription()
 	desc.SnapshotArgs = nil
-	inst := newTemporalInstance(desc)
+	inst := newTemporalInstance(desc, nil)
 	state := &testCommandState{Sum: 3}
 	inst.initialPayload = map[string]int{"sum": -1}
 	capturedArgs, err := runSnapshotAndContinueWorkflow(t, inst, desc, state, nil)
@@ -313,6 +315,7 @@ func runSnapshotAndContinueWorkflow(t *testing.T, inst *temporalInstance, desc *
 			activityDecoders: desc.ActivityDecoders(),
 			activityQueue:    activityQueueFor(desc.Kind, desc),
 			tracer:           observability.ActiveTracer(),
+			routing:          &namespaceRouting{},
 		}
 		var err error
 		capturedArgs, err = inst.snapshotAndContinue(ctx, wfCtx, state, map[string]workflow.ReceiveChannel{}, override)
@@ -326,7 +329,7 @@ func runSnapshotAndContinueWorkflow(t *testing.T, inst *temporalInstance, desc *
 
 func TestRestoreSnapshotMemoDecodeError(t *testing.T) {
 	desc := buildTestDescription()
-	inst := newTemporalInstance(desc)
+	inst := newTemporalInstance(desc, nil)
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
 	require.NoError(t, env.SetMemoOnStart(map[string]any{

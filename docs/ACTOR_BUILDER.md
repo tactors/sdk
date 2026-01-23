@@ -92,6 +92,8 @@ actors.NewStateful("ticket", newState).
 
 - `actors.Spawn` starts a long-lived child workflow. Combine with `actors.WithChildName`,
   `actors.WithChildTaskQueue`, or `actors.WithChildWorkflowIDReusePolicy` for advanced routing.
+- `actors.SpawnRemote` starts a workflow in another namespace (not a child). Use
+  `actors.WithSpawnNamespace` to target a specific namespace.
 - `actors.SpawnOneShot` launches a child, sends exactly one command, and returns the typed response.
   Provide `actors.WithChildKind` so the runtime knows which actor description to spin up.
 - `actors.Tell` sends typed commands to other actors via signals; `actors.Ask` executes a command and

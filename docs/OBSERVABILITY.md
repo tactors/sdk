@@ -82,6 +82,7 @@ same interfaces. This keeps the SDK minimal while still emitting structured span
 ### Span and metric attributes (current default set)
 
 - `actor.kind`, `actor.workflow_id`, `actor.run_id`, `actor.queue` for commands, asks, queries.
+- `actor.namespace`, `actor.target_namespace`, and `actor.cross_namespace` when namespace routing is enabled.
 - `command.name`, `ask.target_kind`, `query.target_kind`, `message_id`, `correlation_id`.
 - Outcome tags: success/failure, error type (business/non-retryable), duration histograms per verb.
 

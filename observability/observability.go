@@ -2,6 +2,7 @@ package observability
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 )
@@ -68,11 +69,13 @@ type CommandEvent struct {
 type AskEvent struct {
 	CallerKind      string
 	CallerID        string
+	CallerNamespace string
 	CallerWorkflow  string
 	CallerRunID     string
 	CallerTaskQueue string
 	TargetKind      string
 	TargetID        string
+	TargetNamespace string
 	Command         string
 	CorrelationID   string
 	Attributes      []Attribute
@@ -82,11 +85,13 @@ type AskEvent struct {
 type QueryEvent struct {
 	CallerKind      string
 	CallerID        string
+	CallerNamespace string
 	CallerWorkflow  string
 	CallerRunID     string
 	CallerTaskQueue string
 	TargetKind      string
 	TargetID        string
+	TargetNamespace string
 	Query           string
 	CorrelationID   string
 	Attributes      []Attribute
@@ -221,6 +226,11 @@ func RecordCommandMetrics(kind, command string, duration time.Duration, err erro
 
 // RecordQueryMetrics emits metrics for cross-actor queries.
 func RecordQueryMetrics(callerKind, calleeKind, query string, duration time.Duration, err error) {
+	RecordQueryMetricsWithNamespace(callerKind, calleeKind, query, "", "", duration, err)
+}
+
+// RecordQueryMetricsWithNamespace emits metrics for cross-actor queries with namespace labels.
+func RecordQueryMetricsWithNamespace(callerKind, calleeKind, query, callerNS, targetNS string, duration time.Duration, err error) {
 	meterMu.RLock()
 	m := activeMeter
 	meterMu.RUnlock()
@@ -232,6 +242,15 @@ func RecordQueryMetrics(callerKind, calleeKind, query string, duration time.Dura
 		String("actor.target_kind", calleeKind),
 		String("actor.query", query),
 	}
+	if strings.TrimSpace(callerNS) != "" {
+		attrs = append(attrs, String("actor.namespace", callerNS))
+	}
+	if strings.TrimSpace(targetNS) != "" {
+		attrs = append(attrs, String("actor.target_namespace", targetNS))
+	}
+	if strings.TrimSpace(callerNS) != "" || strings.TrimSpace(targetNS) != "" {
+		attrs = append(attrs, Bool("actor.cross_namespace", callerNS != targetNS))
+	}
 	m.RecordHistogram(context.Background(), "actor_query_duration", duration, attrs...)
 	counter := "actor_query_success_total"
 	if err != nil {
@@ -242,6 +261,11 @@ func RecordQueryMetrics(callerKind, calleeKind, query string, duration time.Dura
 
 // RecordAskMetrics emits metrics for ask-style cross-actor commands.
 func RecordAskMetrics(callerKind, calleeKind, command string, duration time.Duration, err error) {
+	RecordAskMetricsWithNamespace(callerKind, calleeKind, command, "", "", duration, err)
+}
+
+// RecordAskMetricsWithNamespace emits metrics for ask-style cross-actor commands with namespace labels.
+func RecordAskMetricsWithNamespace(callerKind, calleeKind, command, callerNS, targetNS string, duration time.Duration, err error) {
 	meterMu.RLock()
 	m := activeMeter
 	meterMu.RUnlock()
@@ -252,6 +276,15 @@ func RecordAskMetrics(callerKind, calleeKind, command string, duration time.Dura
 		String("actor.kind", callerKind),
 		String("actor.target_kind", calleeKind),
 		String("actor.command", command),
+	}
+	if strings.TrimSpace(callerNS) != "" {
+		attrs = append(attrs, String("actor.namespace", callerNS))
+	}
+	if strings.TrimSpace(targetNS) != "" {
+		attrs = append(attrs, String("actor.target_namespace", targetNS))
+	}
+	if strings.TrimSpace(callerNS) != "" || strings.TrimSpace(targetNS) != "" {
+		attrs = append(attrs, Bool("actor.cross_namespace", callerNS != targetNS))
 	}
 	m.RecordHistogram(context.Background(), "actor_ask_duration", duration, attrs...)
 	counter := "actor_ask_success_total"

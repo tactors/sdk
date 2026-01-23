@@ -234,6 +234,16 @@ func Spawn(ctx Ctx, kind string, init any, opts ...SpawnOption) (Ref, error) {
 	return Ref{}, ErrUnsupported
 }
 
+// SpawnRemote launches a long-lived actor in another namespace (not a child workflow).
+func SpawnRemote(ctx Ctx, kind string, init any, opts ...SpawnOption) (Ref, error) {
+	if spawner, ok := ctx.(interface {
+		SpawnRemote(kind string, init any, opts ...SpawnOption) (Ref, error)
+	}); ok {
+		return spawner.SpawnRemote(kind, init, opts...)
+	}
+	return Ref{}, ErrUnsupported
+}
+
 // SpawnOneShot launches a one-shot child workflow returning a typed response.
 func SpawnOneShot[Req TypedCommandMessage[Resp], Resp any](ctx Ctx, req Req, opts ...SpawnOption) (Resp, error) {
 	var zero Resp

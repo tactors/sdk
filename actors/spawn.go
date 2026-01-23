@@ -14,6 +14,7 @@ type SpawnConfig struct {
 	Name      string
 	Timeout   time.Duration
 	TaskQueue string
+	Namespace string
 }
 
 // SpawnOption customizes spawn behavior.
@@ -42,5 +43,12 @@ func WithChildKind(kind string) SpawnOption {
 func WithChildTaskQueue(name string) SpawnOption {
 	return func(cfg *SpawnConfig) {
 		cfg.TaskQueue = strings.TrimSpace(name)
+	}
+}
+
+// WithSpawnNamespace targets a Temporal namespace for remote spawns.
+func WithSpawnNamespace(name string) SpawnOption {
+	return func(cfg *SpawnConfig) {
+		cfg.Namespace = strings.TrimSpace(name)
 	}
 }

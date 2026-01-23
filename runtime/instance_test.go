@@ -22,7 +22,7 @@ func TestPrepareCommandRequest(t *testing.T) {
 			},
 		},
 	}
-	inst := newTemporalInstance(desc)
+	inst := newTemporalInstance(desc, nil)
 
 	t.Run("missing command", func(t *testing.T) {
 		_, _, ok, err := inst.prepareCommandRequest("missing", nil)

@@ -92,6 +92,35 @@ if err := set.StartAll(ctx); err != nil {
 Callers can use `actors.InvokeAsk` / `actors.InvokeTell` with the same data converter, or just signal
 the workflow type `hello` using Temporal tooling.
 
+### Advanced: multiple Temporal namespaces (opt-in)
+
+If you intentionally run actors in multiple Temporal namespaces, enable routing explicitly:
+
+```go
+pool := runtime.StaticClientPool{
+    Default: "accounts",
+    Clients: map[string]runtime.TemporalClient{
+        "accounts": accountsClient,
+        "cards":    cardsClient,
+    },
+}
+resolver := runtime.KindNamespaceMap{
+    "Account": "accounts",
+    "Card":    "cards",
+}
+policy := runtime.CrossNamespacePolicy{Enabled: true}
+
+set := runtime.NewWorkerSet(accountsClient).
+    Configure(
+        runtime.WithClientPool(pool),
+        runtime.WithNamespaceResolver(resolver),
+        runtime.WithCrossNamespacePolicy(policy),
+    )
+```
+
+Cross-namespace calls run through bridge activities in the caller namespace. This is off by
+default; you must enable it via `CrossNamespacePolicy`.
+
 ## 3) Try it via testsuite or CLI
 
 **Testsuite (no cluster needed):** drive real workflows/activities deterministically.

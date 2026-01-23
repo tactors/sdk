@@ -21,8 +21,13 @@ func NewRunner(actor actors.Actor) *Runner {
 
 // Workflow returns a Temporal workflow function that drives the actor description.
 func (r *Runner) Workflow() interface{} {
+	return r.WorkflowWithRouting(nil)
+}
+
+// WorkflowWithRouting returns a workflow function configured with runtime routing.
+func (r *Runner) WorkflowWithRouting(routing *namespaceRouting) interface{} {
 	return func(ctx workflow.Context, id string, init any) (any, error) {
-		inst := newTemporalInstance(r.desc)
+		inst := newTemporalInstance(r.desc, routing)
 		return inst.run(ctx, id, init)
 	}
 }

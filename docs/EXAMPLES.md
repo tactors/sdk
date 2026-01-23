@@ -12,6 +12,7 @@ They are still wired to the Temporal testsuite and use the same builder APIs des
 - **Cross-actor workflows:** `telegram` (multi-command workflow, ask/query between actors, fire-and-forget activities).
 - **Caching pattern:** `ticketing` (`actors.WithCache`, stop-command).
 - **Durable cadence:** `control` (`control.AwaitInterval`, snapshots, diagnostics queries).
+- **Cross-namespace topology:** see [`docs/CROSS_NAMESPACE.md`](CROSS_NAMESPACE.md) for the opt-in setup.
 
 ## Run commands (from the samples repo root)
 

@@ -56,6 +56,7 @@ type wfContext struct {
 	tracer            observability.Tracer
 	snapshotInfo      actors.SnapshotInfo
 	queryCache        map[string]map[string]queryCacheEntry
+	routing           *namespaceRouting
 }
 
 func (c *wfContext) ActorID() string { return c.ref.ID }
@@ -322,6 +323,13 @@ func (c *wfContext) SpawnChild(kind string, init any, opts ...actors.SpawnOption
 	if desc == nil {
 		return actors.Ref{}, fmt.Errorf("actors: actor kind %q not registered", kind)
 	}
+	if cfg.Namespace != "" {
+		callerNS := c.routing.effectiveNamespace(c.ref.Namespace)
+		targetNS := c.routing.effectiveNamespace(cfg.Namespace)
+		if callerNS != targetNS {
+			return actors.Ref{}, fmt.Errorf("actors: SpawnChild cannot target namespace %q", targetNS)
+		}
+	}
 	childID := cfg.Name
 	if childID == "" {
 		childID = c.nextChildID(kind)
@@ -350,13 +358,74 @@ func (c *wfContext) SpawnChild(kind string, init any, opts ...actors.SpawnOption
 	if err := execFuture.Get(childCtx, &exec); err != nil {
 		return actors.Ref{}, err
 	}
-	return actors.Ref{Kind: kind, ID: childID}, nil
+	childRef := actors.Ref{Kind: kind, ID: childID}
+	if ns := c.routing.effectiveNamespace(c.ref.Namespace); ns != "" {
+		childRef.Namespace = ns
+	}
+	return childRef, nil
+}
+
+func (c *wfContext) SpawnRemote(kind string, init any, opts ...actors.SpawnOption) (actors.Ref, error) {
+	if kind == "" {
+		return actors.Ref{}, fmt.Errorf("actors: spawn kind must be non-empty")
+	}
+	cfg := applySpawnOptions(opts...)
+	desc := actors.LookupDescription(kind)
+	if desc == nil {
+		return actors.Ref{}, fmt.Errorf("actors: actor kind %q not registered", kind)
+	}
+	childID := cfg.Name
+	if childID == "" {
+		childID = c.nextChildID(kind)
+	}
+	targetNS := cfg.Namespace
+	if strings.TrimSpace(targetNS) == "" {
+		targetNS = c.routing.resolveNamespace(actors.Ref{Kind: kind, ID: childID})
+	}
+	targetNS = c.routing.effectiveNamespace(targetNS)
+	callerNS := c.routing.effectiveNamespace(c.ref.Namespace)
+	if err := c.routing.canCrossNamespace(callerNS, targetNS); err != nil {
+		return actors.Ref{}, err
+	}
+	queue := cfg.TaskQueue
+	if queue == "" {
+		queue = workflowQueueFor(kind, desc)
+	}
+	childRef := actors.Ref{
+		Namespace:    targetNS,
+		Kind:         kind,
+		ID:           childID,
+		Workflow:     childID,
+		WorkflowType: kind,
+		TaskQueue:    queue,
+	}
+	req := bridgeSpawnRequest{
+		Ref:             childRef,
+		Init:            init,
+		Parent:          c.ref,
+		Correlation:     c.correlation.Clone(),
+		Timeout:         cfg.Timeout,
+		CallerNamespace: callerNS,
+		TargetNamespace: targetNS,
+	}
+	future := c.activityWithContext(c.workflowCtx, bridgeSpawnRemoteActivity, req, actors.ActivityCallOptions{})
+	if _, err := future.Get(); err != nil {
+		return actors.Ref{}, err
+	}
+	return childRef, nil
 }
 
 func (c *wfContext) SpawnOneShot(payload any, opts ...actors.SpawnOption) (any, error) {
 	cfg := applySpawnOptions(opts...)
 	if cfg.Kind == "" {
 		return nil, fmt.Errorf("actors: WithChildKind is required for SpawnOneShot")
+	}
+	if cfg.Namespace != "" {
+		callerNS := c.routing.effectiveNamespace(c.ref.Namespace)
+		targetNS := c.routing.effectiveNamespace(cfg.Namespace)
+		if callerNS != targetNS {
+			return nil, fmt.Errorf("actors: SpawnOneShot cannot target namespace %q", targetNS)
+		}
 	}
 	desc := actors.LookupDescription(cfg.Kind)
 	if desc == nil {
@@ -406,6 +475,60 @@ func (c *wfContext) nextChildID(kind string) string {
 	return fmt.Sprintf("%s-%s-%d", c.ref.ID, kind, c.childSeq)
 }
 
+func (c *wfContext) namespaceInfo(ref actors.Ref) (string, string, bool, error) {
+	if c.routing == nil {
+		return "", "", false, nil
+	}
+	callerNS := c.routing.effectiveNamespace(c.ref.Namespace)
+	targetNS := c.routing.resolveNamespace(ref)
+	targetNS = c.routing.effectiveNamespace(targetNS)
+	if callerNS == targetNS {
+		return callerNS, targetNS, false, nil
+	}
+	if err := c.routing.canCrossNamespace(callerNS, targetNS); err != nil {
+		return callerNS, targetNS, false, err
+	}
+	return callerNS, targetNS, true, nil
+}
+
+func (c *wfContext) queryViaBridge(ref actors.Ref, name string, payload any, id, callerNS, targetNS string) (any, error) {
+	req := bridgeQueryRequest{
+		Ref:             normalizeWorkflowRef(ref),
+		Method:          name,
+		Payload:         payload,
+		CallerNamespace: callerNS,
+		TargetNamespace: targetNS,
+	}
+	future := c.activityWithContext(c.workflowCtx, bridgeInvokeQueryActivity, req, actors.ActivityCallOptions{})
+	return future.Get()
+}
+
+func (c *wfContext) askViaBridge(ref actors.Ref, name string, payload any, id, callerNS, targetNS string) (any, error) {
+	req := bridgeAskRequest{
+		Ref:             normalizeWorkflowRef(ref),
+		Method:          name,
+		Payload:         payload,
+		CorrelationID:   id,
+		CallerNamespace: callerNS,
+		TargetNamespace: targetNS,
+	}
+	future := c.activityWithContext(c.workflowCtx, bridgeInvokeAskActivity, req, actors.ActivityCallOptions{})
+	return future.Get()
+}
+
+func (c *wfContext) tellViaBridge(ref actors.Ref, name string, payload any, callerNS, targetNS string) error {
+	req := bridgeCommandRequest{
+		Ref:             normalizeWorkflowRef(ref),
+		Method:          name,
+		Payload:         payload,
+		CallerNamespace: callerNS,
+		TargetNamespace: targetNS,
+	}
+	future := c.activityWithContext(c.workflowCtx, bridgeInvokeCommandActivity, req, actors.ActivityCallOptions{})
+	_, err := future.Get()
+	return err
+}
+
 func (c *wfContext) QueryActor(ref actors.Ref, payload any) (any, error) {
 	if ref.ID == "" {
 		return nil, fmt.Errorf("actors: target ref ID is empty")
@@ -418,6 +541,13 @@ func (c *wfContext) QueryActor(ref actors.Ref, payload any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	callerNS, targetNS, crossNS, err := c.namespaceInfo(ref)
+	if err != nil {
+		return nil, err
+	}
+	if targetNS != "" {
+		ref.Namespace = targetNS
+	}
 	start := time.Now()
 	tracer := c.tracer
 	if tracer == nil {
@@ -428,6 +558,21 @@ func (c *wfContext) QueryActor(ref actors.Ref, payload any) (any, error) {
 		observability.String("actor.target_kind", ref.Kind),
 		observability.String("actor.target_id", ref.ID),
 		observability.String("actor.query", name),
+	}
+	if callerNS != "" {
+		attrs = append(attrs, observability.String("actor.namespace", callerNS))
+	}
+	if targetNS != "" {
+		attrs = append(attrs, observability.String("actor.target_namespace", targetNS))
+	}
+	if c.ref.Tenant != "" {
+		attrs = append(attrs, observability.String("actor.tenant", c.ref.Tenant))
+	}
+	if ref.Tenant != "" {
+		attrs = append(attrs, observability.String("actor.target_tenant", ref.Tenant))
+	}
+	if callerNS != "" || targetNS != "" {
+		attrs = append(attrs, observability.Bool("actor.cross_namespace", crossNS))
 	}
 	var queryEvent observability.QueryEvent
 	var haveQueryEvent bool
@@ -443,7 +588,7 @@ func (c *wfContext) QueryActor(ref actors.Ref, payload any) (any, error) {
 		if haveQueryEvent {
 			emitQueryFinish(c.workflowCtx, queryEvent, err, duration)
 		}
-		observability.RecordQueryMetrics(c.ref.Kind, ref.Kind, name, duration, err)
+		observability.RecordQueryMetricsWithNamespace(c.ref.Kind, ref.Kind, name, callerNS, targetNS, duration, err)
 	}()
 	id, ch, err := c.registerQueryWaiter()
 	if err != nil {
@@ -452,6 +597,10 @@ func (c *wfContext) QueryActor(ref actors.Ref, payload any) (any, error) {
 	queryEvent = queryEventFrom(c.workflowCtx, c.ref, ref, name, id, attrs)
 	haveQueryEvent = true
 	emitQueryStart(c.workflowCtx, queryEvent)
+	if crossNS {
+		c.removeQueryWaiter(id)
+		return c.queryViaBridge(ref, name, payload, id, callerNS, targetNS)
+	}
 	meta := c.newOutgoingMetadata("query", id)
 	req := queryRequest{
 		ID:            id,
@@ -499,6 +648,13 @@ func (c *wfContext) askViaSignal(ref actors.Ref, payload any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	callerNS, targetNS, crossNS, err := c.namespaceInfo(ref)
+	if err != nil {
+		return nil, err
+	}
+	if targetNS != "" {
+		ref.Namespace = targetNS
+	}
 	start := time.Now()
 	tracer := c.tracer
 	if tracer == nil {
@@ -509,6 +665,21 @@ func (c *wfContext) askViaSignal(ref actors.Ref, payload any) (any, error) {
 		observability.String("actor.target_kind", ref.Kind),
 		observability.String("actor.target_id", ref.ID),
 		observability.String("actor.command", name),
+	}
+	if callerNS != "" {
+		attrs = append(attrs, observability.String("actor.namespace", callerNS))
+	}
+	if targetNS != "" {
+		attrs = append(attrs, observability.String("actor.target_namespace", targetNS))
+	}
+	if c.ref.Tenant != "" {
+		attrs = append(attrs, observability.String("actor.tenant", c.ref.Tenant))
+	}
+	if ref.Tenant != "" {
+		attrs = append(attrs, observability.String("actor.target_tenant", ref.Tenant))
+	}
+	if callerNS != "" || targetNS != "" {
+		attrs = append(attrs, observability.Bool("actor.cross_namespace", crossNS))
 	}
 	var askEvent observability.AskEvent
 	var haveAskEvent bool
@@ -524,7 +695,7 @@ func (c *wfContext) askViaSignal(ref actors.Ref, payload any) (any, error) {
 		if haveAskEvent {
 			emitAskFinish(c.workflowCtx, askEvent, err, duration)
 		}
-		observability.RecordAskMetrics(c.ref.Kind, ref.Kind, name, duration, err)
+		observability.RecordAskMetricsWithNamespace(c.ref.Kind, ref.Kind, name, callerNS, targetNS, duration, err)
 	}()
 	id, ch, err := c.registerAskWaiter()
 	if err != nil {
@@ -533,6 +704,10 @@ func (c *wfContext) askViaSignal(ref actors.Ref, payload any) (any, error) {
 	askEvent = askEventFrom(c.workflowCtx, c.ref, ref, name, id, attrs)
 	haveAskEvent = true
 	emitAskStart(c.workflowCtx, askEvent)
+	if crossNS {
+		c.removeAskWaiter(id)
+		return c.askViaBridge(ref, name, payload, id, callerNS, targetNS)
+	}
 	meta := c.newOutgoingMetadata("ask", id)
 	c.applySignalDeadline(desc, name, &meta)
 	req := askRequest{
@@ -566,11 +741,13 @@ func queryEventFrom(ctx workflow.Context, caller, target actors.Ref, name, corre
 	return observability.QueryEvent{
 		CallerKind:      caller.Kind,
 		CallerID:        caller.ID,
+		CallerNamespace: caller.Namespace,
 		CallerWorkflow:  info.WorkflowExecution.ID,
 		CallerRunID:     info.WorkflowExecution.RunID,
 		CallerTaskQueue: info.TaskQueueName,
 		TargetKind:      target.Kind,
 		TargetID:        target.ID,
+		TargetNamespace: target.Namespace,
 		Query:           name,
 		CorrelationID:   correlationID,
 		Attributes:      append([]observability.Attribute(nil), attrs...),
@@ -582,11 +759,13 @@ func askEventFrom(ctx workflow.Context, caller, target actors.Ref, name, correla
 	return observability.AskEvent{
 		CallerKind:      caller.Kind,
 		CallerID:        caller.ID,
+		CallerNamespace: caller.Namespace,
 		CallerWorkflow:  info.WorkflowExecution.ID,
 		CallerRunID:     info.WorkflowExecution.RunID,
 		CallerTaskQueue: info.TaskQueueName,
 		TargetKind:      target.Kind,
 		TargetID:        target.ID,
+		TargetNamespace: target.Namespace,
 		Command:         name,
 		CorrelationID:   correlationID,
 		Attributes:      append([]observability.Attribute(nil), attrs...),
@@ -596,6 +775,13 @@ func askEventFrom(ctx workflow.Context, caller, target actors.Ref, name, correla
 func (c *wfContext) RequestContinueAsNew(ref actors.Ref, opts actors.ContinueAsNewOptions) error {
 	if ref.ID == "" {
 		return fmt.Errorf("actors: target ref ID is empty")
+	}
+	_, _, crossNS, err := c.namespaceInfo(ref)
+	if err != nil {
+		return err
+	}
+	if crossNS {
+		return fmt.Errorf("actors: cross-namespace continue-as-new is not supported")
 	}
 	id, ch, err := c.registerContinueWaiter()
 	if err != nil {
@@ -937,12 +1123,19 @@ func (c *wfContext) SendCommand(ref actors.Ref, payload any) error {
 	if err != nil {
 		return err
 	}
+	callerNS, targetNS, crossNS, err := c.namespaceInfo(ref)
+	if err != nil {
+		return err
+	}
 	req := tellRequest{
 		Command:  name,
 		Payload:  payload,
 		Envelope: c.newOutgoingMetadata("tell"),
 	}
 	c.applySignalDeadline(desc, name, &req.Envelope)
+	if crossNS {
+		return c.tellViaBridge(ref, name, payload, callerNS, targetNS)
+	}
 	fut := workflow.SignalExternalWorkflow(c.workflowCtx, ref.ID, "", tellRequestSignal, req)
 	return fut.Get(c.workflowCtx, nil)
 }

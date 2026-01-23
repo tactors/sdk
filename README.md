@@ -29,6 +29,7 @@ types, but handler routing stays strongly typed.
 
 - Builder reference: [`docs/ACTOR_BUILDER.md`](docs/ACTOR_BUILDER.md).
 - Runtime/worker behavior: [`docs/RUNTIME_TEMPORAL.md`](docs/RUNTIME_TEMPORAL.md).
+- Advanced topology: [`docs/CROSS_NAMESPACE.md`](docs/CROSS_NAMESPACE.md) (opt-in routing across Temporal namespaces).
 - Temporal-first map: [`docs/INDEX.md`](docs/INDEX.md) and [`docs/TEMPORAL_MENTAL_MODEL.md`](docs/TEMPORAL_MENTAL_MODEL.md).
 - Ops & maintenance: [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) and [`docs/CONTROL_WORKFLOWS.md`](docs/CONTROL_WORKFLOWS.md).
 - Orchestration pattern: [`docs/ACTIVITY_FLOW_PATTERN.md`](docs/ACTIVITY_FLOW_PATTERN.md) for “actor is the graph” guidance.

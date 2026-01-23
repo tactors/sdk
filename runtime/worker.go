@@ -32,8 +32,10 @@ type WorkerSet struct {
 	activityWorkers  map[string]temporalWorker
 	workflowBindings map[string]*queueBinding
 	activityBindings map[string]*queueBinding
+	bridgeRegistered map[temporalWorker]struct{}
 	defaults         WorkerConfig
 	newWorker        func(string, worker.Options) temporalWorker
+	routing          *namespaceRouting
 }
 
 type queueBinding struct {
@@ -150,8 +152,50 @@ func newWorkerSetWithFactory(factory func(string, worker.Options) temporalWorker
 		activityWorkers:  make(map[string]temporalWorker),
 		workflowBindings: make(map[string]*queueBinding),
 		activityBindings: make(map[string]*queueBinding),
+		bridgeRegistered: make(map[temporalWorker]struct{}),
 		defaults:         defaults,
 		newWorker:        factory,
+		routing:          &namespaceRouting{},
+	}
+}
+
+// WorkerSetOption customizes worker set behavior.
+type WorkerSetOption func(*WorkerSet)
+
+// Configure applies options to the worker set. Options should be set before Register.
+func (s *WorkerSet) Configure(opts ...WorkerSetOption) *WorkerSet {
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+	return s
+}
+
+// WithClientPool installs a namespace-aware client pool.
+func WithClientPool(pool ClientPool) WorkerSetOption {
+	return func(s *WorkerSet) {
+		if s != nil && s.routing != nil {
+			s.routing.pool = pool
+		}
+	}
+}
+
+// WithNamespaceResolver installs a namespace resolver.
+func WithNamespaceResolver(resolver NamespaceResolver) WorkerSetOption {
+	return func(s *WorkerSet) {
+		if s != nil && s.routing != nil {
+			s.routing.resolver = resolver
+		}
+	}
+}
+
+// WithCrossNamespacePolicy configures cross-namespace routing policy.
+func WithCrossNamespacePolicy(policy CrossNamespacePolicy) WorkerSetOption {
+	return func(s *WorkerSet) {
+		if s != nil && s.routing != nil {
+			s.routing.policy = policy
+		}
 	}
 }
 
@@ -231,6 +275,7 @@ func (s *WorkerSet) Register(actor actors.Actor, cfg WorkerConfig) (Registration
 	activities := runner.Activities()
 	hasActivities := len(activities) > 0
 	hasWorkflow := desc.HasWorkflow()
+	needsBridge := s.routing != nil && s.routing.bridgeEnabled() && hasWorkflow
 
 	wfQueue := resolveWorkflowQueue(kind, desc, cfg, s.defaults)
 	actQueue := resolveActivityQueue(kind, desc, cfg, s.defaults)
@@ -250,10 +295,11 @@ func (s *WorkerSet) Register(actor actors.Actor, cfg WorkerConfig) (Registration
 		s.workflowWorkers[wfQueue] = worker
 		s.activityWorkers[actQueue] = worker
 
-		worker.RegisterWorkflowWithOptions(runner.Workflow(), workflow.RegisterOptions{Name: kind})
+		worker.RegisterWorkflowWithOptions(runner.WorkflowWithRouting(s.routing), workflow.RegisterOptions{Name: kind})
 		for name, fn := range activities {
 			worker.RegisterActivityWithOptions(fn, activity.RegisterOptions{Name: name})
 		}
+		s.registerBridgeActivities(worker)
 		s.ensureWorkflowBinding(wfQueue).markEnabled(kind)
 		s.ensureActivityBinding(actQueue).markEnabled(kind)
 	default:
@@ -265,7 +311,7 @@ func (s *WorkerSet) Register(actor actors.Actor, cfg WorkerConfig) (Registration
 				wfWorker = s.newWorker(wfQueue, wfOpts)
 				s.workflowWorkers[wfQueue] = wfWorker
 			}
-			wfWorker.RegisterWorkflowWithOptions(runner.Workflow(), workflow.RegisterOptions{Name: kind})
+			wfWorker.RegisterWorkflowWithOptions(runner.WorkflowWithRouting(s.routing), workflow.RegisterOptions{Name: kind})
 			s.ensureWorkflowBinding(wfQueue).markEnabled(kind)
 		} else {
 			wfOpts.DisableWorkflowWorker = true
@@ -273,8 +319,12 @@ func (s *WorkerSet) Register(actor actors.Actor, cfg WorkerConfig) (Registration
 		}
 
 		actOpts := mergeWorkerOptions(cfg.ActivityWorkerOptions, s.defaults.ActivityWorkerOptions)
-		if hasActivities {
-			actOpts.DisableWorkflowWorker = !hasWorkflow
+		if hasActivities || needsBridge {
+			if hasActivities {
+				actOpts.DisableWorkflowWorker = !hasWorkflow
+			} else {
+				actOpts.DisableWorkflowWorker = true
+			}
 			actWorker := s.activityWorkers[actQueue]
 			if actWorker == nil {
 				actWorker = s.newWorker(actQueue, actOpts)
@@ -283,6 +333,7 @@ func (s *WorkerSet) Register(actor actors.Actor, cfg WorkerConfig) (Registration
 			for name, fn := range activities {
 				actWorker.RegisterActivityWithOptions(fn, activity.RegisterOptions{Name: name})
 			}
+			s.registerBridgeActivities(actWorker)
 			s.ensureActivityBinding(actQueue).markEnabled(kind)
 		} else {
 			actOpts.DisableWorkflowWorker = true

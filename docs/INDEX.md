@@ -15,6 +15,8 @@ For teams already running Temporal. Start here if you know signals/queries/Conti
 - **Getting started for Temporal users:** [Getting Started](GETTING_STARTED.md) (minimal delta from standard worker code; quick ask/query).
 - **Builder reference:** [Actor builder](ACTOR_BUILDER.md) (per-command retries/timeouts/cache, child workflows, asks/queries).
 - **Runtime & workers:** [Temporal runtime](RUNTIME_TEMPORAL.md) (queue conventions, worker options/interceptors, data converter).
+- **Advanced topology:** [Cross-namespace actors](CROSS_NAMESPACE.md) (opt-in routing across Temporal namespaces).
+- **Cross-namespace example:** [Minimal wiring](CROSS_NAMESPACE_EXAMPLE.md) (worker config + SpawnRemote).
 - **Ops & troubleshooting:** [Diagnostics](DIAGNOSTICS.md) (patch/snapshot queries, worker health), [Control workflows](CONTROL_WORKFLOWS.md) (durable cadences).
 - **Telemetry:** [Observability](OBSERVABILITY.md) (span/metric fields, replay filtering, OTel stitching).
 - **Runnable samples:** [Examples](EXAMPLES.md) grouped by Temporal task (fan-out asks, child orchestration, control cadence). More end-to-end apps live at https://github.com/tactors/samples.

@@ -36,6 +36,18 @@ func RegisterTemporalClient(cli TemporalClient) {
 	})
 }
 
+// RegisterTemporalClientPool wires a namespace-aware client pool into the actors.Client invoker pipeline.
+func RegisterTemporalClientPool(pool ClientPool, resolver NamespaceResolver, policy CrossNamespacePolicy) {
+	if pool == nil {
+		return
+	}
+	routing := &namespaceRouting{pool: pool, resolver: resolver, policy: policy}
+	shared := newPooledClientInvoker(routing)
+	actors.RegisterClientInvoker(func(ref actors.Ref) actors.ClientInvoker {
+		return shared
+	})
+}
+
 type temporalClientInvoker struct {
 	client     TemporalClient
 	runIDCache sync.Map
@@ -250,4 +262,72 @@ func isStaleRunError(err error) bool {
 	default:
 		return false
 	}
+}
+
+type pooledClientInvoker struct {
+	routing  *namespaceRouting
+	mu       sync.Mutex
+	invokers map[string]*temporalClientInvoker
+}
+
+func newPooledClientInvoker(routing *namespaceRouting) *pooledClientInvoker {
+	if routing == nil {
+		routing = &namespaceRouting{}
+	}
+	return &pooledClientInvoker{
+		routing:  routing,
+		invokers: make(map[string]*temporalClientInvoker),
+	}
+}
+
+func (p *pooledClientInvoker) InvokeCommand(ctx context.Context, ref actors.Ref, method string, payload any) error {
+	inv, err := p.invokerFor(ref)
+	if err != nil {
+		return err
+	}
+	return inv.InvokeCommand(ctx, ref, method, payload)
+}
+
+func (p *pooledClientInvoker) InvokeAsk(ctx context.Context, ref actors.Ref, method string, payload any, resp any, opts actors.AskOptions) error {
+	inv, err := p.invokerFor(ref)
+	if err != nil {
+		return err
+	}
+	return inv.InvokeAsk(ctx, ref, method, payload, resp, opts)
+}
+
+func (p *pooledClientInvoker) InvokeQuery(ctx context.Context, ref actors.Ref, method string, payload any, resp any) error {
+	inv, err := p.invokerFor(ref)
+	if err != nil {
+		return err
+	}
+	return inv.InvokeQuery(ctx, ref, method, payload, resp)
+}
+
+func (p *pooledClientInvoker) invokerFor(ref actors.Ref) (*temporalClientInvoker, error) {
+	if p == nil || p.routing == nil {
+		return nil, ErrCrossNamespaceDisabled
+	}
+	ref = normalizeWorkflowRef(ref)
+	targetNS := p.routing.resolveNamespace(ref)
+	targetNS = p.routing.effectiveNamespace(targetNS)
+	if targetNS == "" {
+		return nil, errors.New("runtime: target namespace is empty")
+	}
+	callerNS := p.routing.effectiveNamespace(p.routing.defaultNamespace())
+	if err := p.routing.canCrossNamespace(callerNS, targetNS); err != nil {
+		return nil, err
+	}
+	client, err := p.routing.client(targetNS)
+	if err != nil {
+		return nil, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if inv := p.invokers[targetNS]; inv != nil {
+		return inv, nil
+	}
+	inv := &temporalClientInvoker{client: client}
+	p.invokers[targetNS] = inv
+	return inv, nil
 }

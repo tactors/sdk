@@ -8,6 +8,7 @@ import (
 
 // Ref uniquely identifies an actor instance.
 type Ref struct {
+	Namespace    string
 	Workflow     string
 	Kind         string
 	ID           string
@@ -53,6 +54,13 @@ func TRef(tenant, kind, id string, opts ...RefOption) Ref {
 func WithWorkflowType(name string) RefOption {
 	return func(r *Ref) {
 		r.WorkflowType = name
+	}
+}
+
+// WithNamespace overrides the Temporal namespace associated with the reference.
+func WithNamespace(namespace string) RefOption {
+	return func(r *Ref) {
+		r.Namespace = strings.TrimSpace(namespace)
 	}
 }
 

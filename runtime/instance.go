@@ -94,10 +94,14 @@ type temporalInstance struct {
 	desc                 *actors.Description
 	processedSinceRotate int
 	initialPayload       any
+	routing              *namespaceRouting
 }
 
-func newTemporalInstance(desc *actors.Description) *temporalInstance {
-	return &temporalInstance{desc: desc.Clone()}
+func newTemporalInstance(desc *actors.Description, routing *namespaceRouting) *temporalInstance {
+	if routing == nil {
+		routing = &namespaceRouting{}
+	}
+	return &temporalInstance{desc: desc.Clone(), routing: routing}
 }
 
 func (i *temporalInstance) run(ctx workflow.Context, id string, init any) (any, error) {
@@ -150,6 +154,9 @@ func (i *temporalInstance) buildWorkflowContext(ctx workflow.Context, id string,
 		Workflow: execInfo.WorkflowExecution.ID,
 		RunID:    execInfo.WorkflowExecution.RunID,
 	}
+	if ns := i.routing.defaultNamespace(); ns != "" {
+		ref.Namespace = ns
+	}
 	var parent actors.Ref
 	var initCorr actors.CorrelationData
 	var oneShotReq *oneShotCommand
@@ -170,6 +177,7 @@ func (i *temporalInstance) buildWorkflowContext(ctx workflow.Context, id string,
 		activityNames:     i.desc.ActivityNames,
 		activityQueue:     activityQueueFor(i.desc.Kind, i.desc),
 		tracer:            observability.ActiveTracer(),
+		routing:           i.routing,
 	}
 	if i.desc.SnapshotEvery > 0 {
 		wfCtx.snapshotInfo.Enabled = true

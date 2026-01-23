@@ -226,8 +226,9 @@ func TestRefBuildersAndOptions(t *testing.T) {
 		WithTaskQueue("queue"),
 		WithStartArgs("a", "b"),
 		WithRunID("run"),
+		WithNamespace(" ns "),
 	)
-	if ref.WorkflowType != "custom" || ref.TaskQueue != "queue" || ref.RunID != "run" {
+	if ref.WorkflowType != "custom" || ref.TaskQueue != "queue" || ref.RunID != "run" || ref.Namespace != "ns" {
 		t.Fatalf("options not applied: %+v", ref)
 	}
 	payload := ref.StartPayload()
@@ -257,6 +258,7 @@ func TestSpawnOptionBuilders(t *testing.T) {
 		WithChildTimeout(time.Second),
 		WithChildKind("kind"),
 		WithChildTaskQueue(" queue "),
+		WithSpawnNamespace(" ns "),
 	} {
 		opt(&cfg)
 	}
@@ -268,5 +270,8 @@ func TestSpawnOptionBuilders(t *testing.T) {
 	}
 	if cfg.TaskQueue != "queue" {
 		t.Fatalf("task queue not trimmed: %q", cfg.TaskQueue)
+	}
+	if cfg.Namespace != "ns" {
+		t.Fatalf("namespace not trimmed: %q", cfg.Namespace)
 	}
 }
