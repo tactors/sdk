@@ -200,6 +200,36 @@ func TestInvokeHelpersRouteToRegisteredInvoker(t *testing.T) {
 	}
 }
 
+func TestNamedInvokeHelpersRouteToRegisteredInvoker(t *testing.T) {
+	RegisterClientInvoker(nil)
+	stub := &captureInvoker{}
+	RegisterClientInvoker(func(Ref) ClientInvoker { return stub })
+	t.Cleanup(func() { RegisterClientInvoker(nil) })
+
+	ref := ARef("demo", "id")
+	ctx := context.Background()
+	if err := InvokeCommandNamed(ctx, ref, "Increment", map[string]any{"delta": 1}); err != nil {
+		t.Fatalf("invoke named command failed: %v", err)
+	}
+	if stub.commandMethod != "Increment" {
+		t.Fatalf("command invoker saw wrong method: %s", stub.commandMethod)
+	}
+	resp, err := InvokeAskNamed[string](ctx, ref, "AskIncrement", map[string]any{"delta": 1}, WithCorrelationID("corr-1"))
+	if err != nil {
+		t.Fatalf("invoke named ask failed: %v", err)
+	}
+	if resp != "response" || stub.askMethod != "AskIncrement" || stub.askOpts.CorrelationID != "corr-1" {
+		t.Fatalf("named ask mismatch: resp=%q method=%q opts=%+v", resp, stub.askMethod, stub.askOpts)
+	}
+	result, err := InvokeQueryNamed[int](ctx, ref, "Total", map[string]any{})
+	if err != nil {
+		t.Fatalf("invoke named query failed: %v", err)
+	}
+	if result != 42 || stub.queryMethod != "Total" {
+		t.Fatalf("named query mismatch: result=%d method=%q", result, stub.queryMethod)
+	}
+}
+
 func TestInvokeHelpersErrorWhenTypeUnknown(t *testing.T) {
 	RegisterClientInvoker(nil)
 	ref := ARef("demo", "id")
@@ -209,6 +239,20 @@ func TestInvokeHelpersErrorWhenTypeUnknown(t *testing.T) {
 	_, err := InvokeQuery[int](context.Background(), ref, nil)
 	if err == nil {
 		t.Fatalf("expected query type error")
+	}
+}
+
+func TestNamedInvokeHelpersRequireMethod(t *testing.T) {
+	RegisterClientInvoker(nil)
+	ref := ARef("demo", "id")
+	if err := InvokeCommandNamed(context.Background(), ref, " ", map[string]any{}); err == nil {
+		t.Fatalf("expected command method error")
+	}
+	if _, err := InvokeAskNamed[string](context.Background(), ref, "", map[string]any{}); err == nil {
+		t.Fatalf("expected ask method error")
+	}
+	if _, err := InvokeQueryNamed[int](context.Background(), ref, "", map[string]any{}); err == nil {
+		t.Fatalf("expected query method error")
 	}
 }
 

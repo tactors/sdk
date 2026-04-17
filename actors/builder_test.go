@@ -107,6 +107,56 @@ func TestBuilderSupportsEmptyHandlerSets(t *testing.T) {
 	}
 }
 
+func TestBuilderSupportsNamedCommandAndQueryRoutes(t *testing.T) {
+	type routePayload struct {
+		Delta int
+	}
+	type routeState struct {
+		Count int
+	}
+	actor := actors.NewStateful("named", func() routeState { return routeState{} }).
+		With(
+			actors.CommandNamed("Increment", func(ctx actors.Ctx, st *routeState, cmd routePayload) (int, error) {
+				st.Count += cmd.Delta
+				return st.Count, nil
+			}),
+			actors.QueryNamed("Total", func(ctx actors.Ctx, st routeState, _ routePayload) (int, error) {
+				return st.Count, nil
+			}),
+		).
+		Build()
+	desc := actor.Spec()
+	cmd, ok := desc.Commands["Increment"]
+	if !ok {
+		t.Fatalf("named command was not registered: %#v", desc.Commands)
+	}
+	query, ok := desc.Queries["Total"]
+	if !ok {
+		t.Fatalf("named query was not registered: %#v", desc.Queries)
+	}
+	state := routeState{Count: 3}
+	result, err := cmd.Handler.Invoke(nil, &state, routePayload{Delta: 2})
+	if err != nil {
+		t.Fatalf("command failed: %v", err)
+	}
+	if result != 5 || state.Count != 5 {
+		t.Fatalf("command did not run through named route: result=%v state=%+v", result, state)
+	}
+	result, err = query.Handler.Invoke(nil, state, routePayload{})
+	if err != nil {
+		t.Fatalf("query failed: %v", err)
+	}
+	if result != 5 {
+		t.Fatalf("query did not run through named route: %v", result)
+	}
+	if desc.CommandTypes[actors.TypeName[routePayload]()] != "Increment" {
+		t.Fatalf("command type map did not point to explicit route: %#v", desc.CommandTypes)
+	}
+	if desc.QueryTypes[actors.TypeName[routePayload]()] != "Total" {
+		t.Fatalf("query type map did not point to explicit route: %#v", desc.QueryTypes)
+	}
+}
+
 func TestOnStartCanSwapStatePointer(t *testing.T) {
 	type initPayload struct {
 		Value string

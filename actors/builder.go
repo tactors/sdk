@@ -832,13 +832,18 @@ func Start[S any, P any](fn func(Ctx, P) (S, error)) StartAction[S] {
 
 // Command lifts a typed command handler into an action the builder understands.
 func Command[S any, Req any, Resp any](fn func(Ctx, *S, Req) (Resp, error), opts ...CommandOption) CommandAction[S] {
+	return CommandNamed("", fn, opts...)
+}
+
+// CommandNamed registers a command with an explicit runtime route name.
+func CommandNamed[S any, Req any, Resp any](name string, fn func(Ctx, *S, Req) (Resp, error), opts ...CommandOption) CommandAction[S] {
 	cfg := commandOptions{}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
 	reqName := TypeName[Req]()
 	return CommandAction[S]{
-		name:           reqName,
+		name:           explicitOrTypeName(name, reqName),
 		responseType:   TypeName[Resp](),
 		timeout:        cfg.timeout,
 		retry:          cfg.retry,
@@ -869,13 +874,18 @@ func CommandFunc[S any, Req TypedCommandMessage[Resp], Resp any](fn func(Ctx, *S
 
 // Query lifts a typed query handler into an action the builder understands.
 func Query[S any, Req any, Resp any](fn func(Ctx, S, Req) (Resp, error), opts ...QueryOption) QueryAction[S] {
+	return QueryNamed("", fn, opts...)
+}
+
+// QueryNamed registers a query with an explicit runtime route name.
+func QueryNamed[S any, Req any, Resp any](name string, fn func(Ctx, S, Req) (Resp, error), opts ...QueryOption) QueryAction[S] {
 	cfg := queryOptions{}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
 	reqName := TypeName[Req]()
 	return QueryAction[S]{
-		name:           reqName,
+		name:           explicitOrTypeName(name, reqName),
 		responseType:   TypeName[Resp](),
 		cacheTTL:       cfg.cacheTTL,
 		payloadFactory: payloadFactory[Req](),
@@ -900,6 +910,13 @@ func Query[S any, Req any, Resp any](fn func(Ctx, S, Req) (Resp, error), opts ..
 // QueryFunc infers the request/response types from the handler signature.
 func QueryFunc[S any, Req TypedQueryMessage[Resp], Resp any](fn func(Ctx, S, Req) (Resp, error), opts ...QueryOption) QueryAction[S] {
 	return Query[S](fn, opts...)
+}
+
+func explicitOrTypeName(name, typeName string) string {
+	if trimmed := strings.TrimSpace(name); trimmed != "" {
+		return trimmed
+	}
+	return typeName
 }
 
 // Activity registers a typed activity using the payload type as the route name.

@@ -9,6 +9,8 @@ types, but handler routing stays strongly typed.
 
 - Typed actor builders: fix state with `actors.NewStateful`, get typed commands/queries/activities
   via helper embeds, and build once for every runtime consumer.
+- Explicit runtime routes: use `actors.CommandNamed`, `actors.QueryNamed`, and named invoke helpers
+  when route names come from manifests or gateways instead of Go request type names.
 - Declarative knobs: retries, timeouts, caches, queue overrides, snapshots, and validators live on
   the builder so intent is obvious.
 - Temporal-first runtime: one `actors.Description` powers worker registration, Ask/Query plumbing,
@@ -39,6 +41,8 @@ types, but handler routing stays strongly typed.
 
 - `testkit.ActorTemporalScenario` runs actors against Temporal’s testsuite. Stub activities inline
   with `WhenActivity(...)`; it infers names from typed signatures or accepts explicit names.
+- Use `WhenCommandNamed` and `QueryWorkflowNamed` for manifest-driven actors, gateways, or generated
+  systems where the runtime route name is already known.
 - Inspect merged activity options with `ExpectActivityOptions` helpers before execution.
 
 ## Temporal runtime at a glance

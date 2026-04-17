@@ -56,6 +56,11 @@ func (s *ActorTemporalScenario) WhenCommand(payload any) *ActorTemporalScenario 
 	if err != nil {
 		panic(err)
 	}
+	return s.WhenCommandNamed(name, payload)
+}
+
+// WhenCommandNamed sends a command to an explicit runtime route name.
+func (s *ActorTemporalScenario) WhenCommandNamed(name string, payload any) *ActorTemporalScenario {
 	s.scenario.When(name, payload)
 	return s
 }
@@ -193,7 +198,13 @@ func (s *ActorTemporalScenario) QueryWorkflow(payload any) (converter.EncodedVal
 		var empty converter.EncodedValue
 		return empty, err
 	}
+	return s.QueryWorkflowNamed(name, payload)
+}
+
+// QueryWorkflowNamed executes a query against an explicit runtime route name.
+func (s *ActorTemporalScenario) QueryWorkflowNamed(name string, payload any) (converter.EncodedValue, error) {
 	var blob []byte
+	var err error
 	if payload != nil {
 		blob, err = codec.Marshal(payload)
 		if err != nil {

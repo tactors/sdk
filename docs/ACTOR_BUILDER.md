@@ -26,6 +26,10 @@ reference once you have skimmed the [Getting Started](GETTING_STARTED.md) guide.
    and the testsuite-backed testkit) works from that description—only `%T` formatting is used to
    label types; no other runtime reflection is needed.
 
+Use `actors.CommandNamed` and `actors.QueryNamed` when the runtime route name must come from an
+external manifest instead of the Go request type name. This is useful for generated systems,
+gateways, and Arc manifests that already define command/query names.
+
 ### Temporal translation at a glance
 
 - Signals → `actors.Command`; per-command timeouts/retries map to Temporal policies deterministically.
@@ -56,6 +60,17 @@ actors.NewStateful("ticket", newState).
 - `actors.WithCache(ttl)` enables a deterministic query cache for a specific handler.
 - Validators registered via `actors.WithValidator` run before the handler executes and can reject the
   payload deterministically.
+
+Explicit route names use the same per-route options:
+
+```go
+actors.NewStateful("ticket", newState).
+    With(
+        actors.CommandNamed("Assign", handleAssign, actors.WithTimeout(3*time.Second)),
+        actors.QueryNamed("Transcript", handleTranscript, actors.WithCache(time.Minute)),
+    ).
+    Build()
+```
 
 ## Cross-cutting builder options
 
@@ -100,6 +115,11 @@ actors.NewStateful("ticket", newState).
   waits synchronously for the typed result without creating a child workflow.
 - `actors.QueryActor` runs a read-only ask/reply protocol inside a single workflow task. Useful when
   you need to inspect another actor’s state without waiting for signals.
+- External gateways can use `actors.InvokeCommandNamed`, `actors.InvokeAskNamed`, and
+  `actors.InvokeQueryNamed` when they already know the runtime route name and do not want method
+  inference from the Go payload type.
+- Tests for manifest-driven actors can use `testkit.ActorTemporalScenario.WhenCommandNamed` and
+  `QueryWorkflowNamed` for the same reason.
 
 Message metadata (available via `actors.Message(ctx)`) now enforces the optional `Deadline` and
 `RetryBudget` fields. When you set these from callers, each hop decrements the budget and refuses to

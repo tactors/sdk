@@ -71,3 +71,29 @@ func TestActorScenarioStubsActivitiesAndAssertsOptions(t *testing.T) {
 	require.NoError(t, value.Get(&last))
 	require.Equal(t, "stubbed-ok", last)
 }
+
+func TestActorScenarioSupportsNamedCommandsAndQueries(t *testing.T) {
+	type namedPayload struct {
+		Value string
+	}
+	actor := actors.NewStateful("named-scenario", func() stubState { return stubState{} }).
+		With(
+			actors.CommandNamed("Record", func(ctx actors.Ctx, st *stubState, cmd namedPayload) (struct{}, error) {
+				st.Last = cmd.Value
+				return struct{}{}, nil
+			}),
+			actors.QueryNamed("Read", func(ctx actors.Ctx, st stubState, _ namedPayload) (string, error) {
+				return st.Last, nil
+			}),
+		).
+		Build()
+
+	scenario := NewActorTemporalScenario(actor, "named-id", struct{}{})
+	scenario.WhenCommandNamed("Record", namedPayload{Value: "named"}).Run(t)
+
+	value, err := scenario.QueryWorkflowNamed("Read", namedPayload{})
+	require.NoError(t, err)
+	var last string
+	require.NoError(t, value.Get(&last))
+	require.Equal(t, "named", last)
+}
