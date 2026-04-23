@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/mock"
+	"github.com/tactors/sdk/runtime"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 )
@@ -43,6 +44,7 @@ func NewTemporalScenario(wf interface{}, args ...any) *TemporalScenario {
 func NewTemporalScenarioWithOptions(workflowFn interface{}, opts workflow.RegisterOptions, args ...any) *TemporalScenario {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
+	env.SetDataConverter(runtime.DataConverter())
 	if opts.Name != "" {
 		env.RegisterWorkflowWithOptions(workflowFn, opts)
 	} else {

@@ -1,6 +1,7 @@
 package codec
 
 import (
+	"reflect"
 	"testing"
 )
 
@@ -41,5 +42,24 @@ func TestUnmarshalIndefiniteLength(t *testing.T) {
 	}
 	if len(out) != 2 || out[0] != 1 || out[1] != 2 {
 		t.Fatalf("unexpected output: %#v", out)
+	}
+}
+
+func TestUnmarshalInterfaceUsesStringMaps(t *testing.T) {
+	bytes, err := Marshal(map[string]any{
+		"result": map[string]any{
+			"items": []any{map[string]any{"id": "item-1"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got any
+	if err := Unmarshal(bytes, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	want := map[string]any{"result": map[string]any{"items": []any{map[string]any{"id": "item-1"}}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected output: %#v", got)
 	}
 }

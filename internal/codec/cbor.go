@@ -1,6 +1,7 @@
 package codec
 
 import (
+	"reflect"
 	"sync"
 
 	"github.com/fxamacker/cbor/v2"
@@ -20,7 +21,9 @@ func initModes() {
 		if cborInitErr != nil {
 			return
 		}
-		decOptions := cbor.DecOptions{}
+		decOptions := cbor.DecOptions{
+			DefaultMapType: reflect.TypeOf(map[string]any{}),
+		}
 		decOptions.IndefLength = cbor.IndefLengthAllowed
 		defaultDecMode, cborInitErr = decOptions.DecMode()
 	})
