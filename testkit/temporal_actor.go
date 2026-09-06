@@ -65,6 +65,13 @@ func (s *ActorTemporalScenario) WhenCommandNamed(name string, payload any) *Acto
 	return s
 }
 
+// WhenEvent schedules delivery of a named external event to the actor,
+// mirroring actors.DeliverEvent from a client.
+func (s *ActorTemporalScenario) WhenEvent(name string, payload any) *ActorTemporalScenario {
+	s.scenario.WhenEvent(name, payload)
+	return s
+}
+
 // Advance advances the Temporal clock.
 func (s *ActorTemporalScenario) Advance(d time.Duration) *ActorTemporalScenario {
 	s.scenario.Advance(d)

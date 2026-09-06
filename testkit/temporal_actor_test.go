@@ -2,6 +2,7 @@ package testkit
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -96,4 +97,69 @@ func TestActorScenarioSupportsNamedCommandsAndQueries(t *testing.T) {
 	var last string
 	require.NoError(t, value.Get(&last))
 	require.Equal(t, "named", last)
+}
+
+type approvalEventPayload struct {
+	Approver string
+}
+
+type awaitApprovalCommand struct {
+	actors.CommandMsg[struct{}]
+	Timeout time.Duration
+}
+
+type approvalState struct {
+	Approver string
+	TimedOut bool
+}
+
+type approvalQuery struct {
+	actors.QueryMsg[approvalState]
+}
+
+func newApprovalActor() actors.Actor {
+	return actors.NewStateful("approval-scenario", func() approvalState { return approvalState{} }).
+		With(
+			actors.Command(func(ctx actors.Ctx, st *approvalState, cmd awaitApprovalCommand) (struct{}, error) {
+				evt, err := actors.WaitForEventAs[approvalEventPayload](ctx, "approve", cmd.Timeout)
+				if err != nil {
+					st.TimedOut = errors.Is(err, actors.ErrEventTimeout)
+					return struct{}{}, actors.ErrStopLoop
+				}
+				st.Approver = evt.Approver
+				return struct{}{}, actors.ErrStopLoop
+			}),
+			actors.Query(func(ctx actors.Ctx, st approvalState, _ approvalQuery) (approvalState, error) {
+				return st, nil
+			}),
+		).
+		Build()
+}
+
+func TestActorScenarioWhenEventResumesWaitingHandler(t *testing.T) {
+	scenario := NewActorTemporalScenario(newApprovalActor(), "approval-1", struct{}{})
+	scenario.
+		WhenCommand(awaitApprovalCommand{Timeout: time.Hour}).
+		WhenEvent("approve", approvalEventPayload{Approver: "alice"}).
+		Run(t)
+
+	value, err := scenario.QueryWorkflow(approvalQuery{})
+	require.NoError(t, err)
+	var st approvalState
+	require.NoError(t, value.Get(&st))
+	require.Equal(t, approvalState{Approver: "alice"}, st)
+}
+
+func TestActorScenarioWhenEventTimeout(t *testing.T) {
+	scenario := NewActorTemporalScenario(newApprovalActor(), "approval-2", struct{}{})
+	scenario.
+		WhenCommand(awaitApprovalCommand{Timeout: 10 * time.Millisecond}).
+		Advance(20 * time.Millisecond).
+		Run(t)
+
+	value, err := scenario.QueryWorkflow(approvalQuery{})
+	require.NoError(t, err)
+	var st approvalState
+	require.NoError(t, value.Get(&st))
+	require.Equal(t, approvalState{TimedOut: true}, st)
 }

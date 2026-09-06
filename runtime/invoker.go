@@ -88,6 +88,35 @@ func (t *temporalClientInvoker) InvokeCommand(ctx context.Context, ref actors.Re
 	return nil
 }
 
+// DeliverEvent implements actors.EventDeliverer. Unlike InvokeCommand it never
+// signal-with-starts the workflow: an event is only meaningful to a running
+// actor, so a missing execution surfaces as the Temporal not-found error.
+// The payload travels through the runtime data converter (CBOR), exactly like
+// command payloads.
+func (t *temporalClientInvoker) DeliverEvent(ctx context.Context, ref actors.Ref, name string, payload any) error {
+	if t.client == nil {
+		return errors.New("actors: temporal client not registered")
+	}
+	if ref.Workflow == "" {
+		return errors.New("actors: event target workflow id is empty")
+	}
+	signal, err := actors.EventSignalName(name)
+	if err != nil {
+		return err
+	}
+	runID := ref.RunID
+	if runID == "" {
+		runID = t.cachedRunID(ref.Workflow)
+	}
+	err = t.client.SignalWorkflow(ctx, ref.Workflow, runID, signal, payload)
+	if err == nil || ref.RunID != "" || runID == "" || !isStaleRunError(err) {
+		return err
+	}
+	// The cached run is gone (e.g. continue-as-new); retry against the latest run.
+	t.clearRunID(ref.Workflow)
+	return t.client.SignalWorkflow(ctx, ref.Workflow, "", signal, payload)
+}
+
 func (t *temporalClientInvoker) InvokeQuery(ctx context.Context, ref actors.Ref, method string, payload any, resp any) error {
 	if t.client == nil {
 		return errors.New("actors: temporal client not registered")
@@ -294,6 +323,15 @@ func (p *pooledClientInvoker) InvokeAsk(ctx context.Context, ref actors.Ref, met
 		return err
 	}
 	return inv.InvokeAsk(ctx, ref, method, payload, resp, opts)
+}
+
+// DeliverEvent implements actors.EventDeliverer for the namespace-aware pool.
+func (p *pooledClientInvoker) DeliverEvent(ctx context.Context, ref actors.Ref, name string, payload any) error {
+	inv, err := p.invokerFor(ref)
+	if err != nil {
+		return err
+	}
+	return inv.DeliverEvent(ctx, ref, name, payload)
 }
 
 func (p *pooledClientInvoker) InvokeQuery(ctx context.Context, ref actors.Ref, method string, payload any, resp any) error {

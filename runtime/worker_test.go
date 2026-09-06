@@ -43,7 +43,7 @@ func TestWorkerSetReusesQueues(t *testing.T) {
 }
 
 func TestWorkerSetStartAllStopsOnCancel(t *testing.T) {
-	stubs := []*stubWorker{&stubWorker{}, &stubWorker{}}
+	stubs := []*stubWorker{{}, {}}
 	next := 0
 	set := newWorkerSetWithFactory(func(queue string, opts worker.Options) temporalWorker {
 		w := stubs[next]
@@ -77,7 +77,7 @@ func TestWorkerSetStartAllStopsOnCancel(t *testing.T) {
 }
 
 func TestWorkerSetStartAllIdempotent(t *testing.T) {
-	stubs := []*stubWorker{&stubWorker{}, &stubWorker{}}
+	stubs := []*stubWorker{{}, {}}
 	next := 0
 	set := newWorkerSetWithFactory(func(queue string, opts worker.Options) temporalWorker {
 		w := stubs[next]

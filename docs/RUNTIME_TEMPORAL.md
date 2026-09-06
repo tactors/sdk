@@ -217,6 +217,36 @@ runtime.ConfigurePayloadCodecs(offload, codec)
   - `actors.NonRetryable(err)` tells the runtime to stop retries immediately.
   - `actors.RetryAfter(err, d)` requests a durable delay before reprocessing the same message.
 
+## Waiting for external events
+
+`ctx.WaitForEvent(name, timeout)` suspends a command handler until an event named `name` is
+delivered to the actor, or until `timeout` elapses (`<= 0` means wait forever). It is the primitive
+for human-approval pauses and webhook ingestion.
+
+- Durable and deterministic: the Temporal implementation is a `GetSignalChannel` receive plus a
+  workflow timer inside a `Selector`. It survives worker restarts and replays without divergence.
+- Payloads use the same CBOR data converter as commands; `actors.WaitForEventAs[T]` decodes the
+  value into a typed struct.
+- Timeout returns an error that satisfies `errors.Is(err, actors.ErrEventTimeout)`. Handle it in the
+  handler—an unhandled plain error is treated like any other command failure by the loop.
+- If the command itself has `WithTimeout`, or the workflow is cancelled, the wait unblocks with the
+  cancellation error instead.
+- Namespacing: event `approve` travels on the signal `__actors_event:approve`
+  (`actors.EventSignalName`). It can never collide with a command called `approve` or with the
+  runtime's `__actors_*` signals; names starting with `__actors_` are rejected.
+- Mailbox semantics: while a handler is suspended, other commands addressed to the actor stay
+  queued in their signal channels and run after the handler returns. Events delivered before a
+  handler waits are buffered and returned immediately; an event that arrives after a wait timed out
+  stays buffered for the next `WaitForEvent` on that name. Buffered events are not carried across
+  Continue-As-New snapshots.
+- Delivery:
+  - `actors.DeliverEvent(ctx, ref, name, payload)` from clients/gateways. Unlike `InvokeCommand`, it
+    only signals a running workflow and never signal-with-starts one.
+  - `actors.SendEvent(ctx, ref, name, payload)` from inside another actor (same namespace only).
+  - `testkit`: `WhenEvent(name, payload)` on scenarios, and `testkit.NewMemoryCtx` for in-process
+    handler unit tests with a channel-based `DeliverEvent`.
+- Do not call `WaitForEvent` from query handlers; they must not block.
+
 ## Diagnostics queries
 
 - Every actor automatically responds to two reserved Temporal queries:
@@ -255,8 +285,8 @@ runtime.ConfigurePayloadCodecs(offload, codec)
 drive workflows deterministically:
 
 - Registers workflows and activities automatically, assigning a deterministic workflow ID.
-- Offers `WhenCommand` to enqueue typed signals, `Advance` to jump fake time, and `QueryWorkflow` to
-  run typed queries mid-scenario.
+- Offers `WhenCommand` to enqueue typed signals, `WhenEvent` to deliver external events, `Advance`
+  to jump fake time, and `QueryWorkflow` to run typed queries mid-scenario.
 - `Run(t)` executes the workflow and returns the workflow error plus the captured outcome for further
   inspection.
 
@@ -270,6 +300,7 @@ The runtime owns these signals—avoid defining your own handlers under the same
 - `__actors_ask_reply`
 - `__actors_continue_request`
 - `__actors_continue_reply`
+- `__actors_event:<name>` (one per event name used with `WaitForEvent`)
 
 ## Extensibility
 
