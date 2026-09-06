@@ -232,16 +232,35 @@ for human-approval pauses and webhook ingestion.
 - If the command itself has `WithTimeout`, or the workflow is cancelled, the wait unblocks with the
   cancellation error instead.
 - Namespacing: event `approve` travels on the signal `__actors_event:approve`
-  (`actors.EventSignalName`). It can never collide with a command called `approve` or with the
-  runtime's `__actors_*` signals; names starting with `__actors_` are rejected.
-- Mailbox semantics: while a handler is suspended, other commands addressed to the actor stay
-  queued in their signal channels and run after the handler returns. Events delivered before a
-  handler waits are buffered and returned immediately; an event that arrives after a wait timed out
-  stays buffered for the next `WaitForEvent` on that name. Buffered events are not carried across
-  Continue-As-New snapshots.
+  (`actors.EventSignalName`). Names starting with `__actors_` are rejected on both sides: an
+  event may not use the prefix, and a command may not be registered under it. Within those rules an
+  event cannot collide with a command or with the runtime's own signals.
+- Mailbox semantics, precisely: commands delivered as **signals** (`InvokeCommand`, `testkit.When*`)
+  stay queued in their channels while a handler is suspended and run after it returns, in sorted
+  command-name order. Commands that arrive through the **Tell/Ask request signals or Temporal
+  Updates run in their own coroutine and are not held back**: they execute concurrently with the
+  suspended handler on the same state, as they always have for any blocking handler. Queries likewise
+  observe whatever the suspended handler has already written. `WaitForEvent` does not change this
+  model; it makes the window it opens long enough to matter, so a handler that suspends should not
+  leave state half-applied across the wait.
+- Events delivered before a handler waits are buffered and returned immediately; an event that
+  arrives after a wait timed out stays buffered for the next `WaitForEvent` on that name.
+- Continue-As-New: buffered events are not carried across a snapshot -- the drain covers command
+  channels only, and Temporal offers no way to re-inject a signal into the new run. A handler that
+  is **suspended on the Tell/Ask/Update path when the loop continues-as-new is abandoned**: its
+  command sits in no channel to drain, its partial state is what gets snapshotted, and it never
+  returns. Signal-path handlers are safe because the loop cannot reach the snapshot while one is
+  running.
+- `timeout <= 0` is a wait without limit. Temporal itself is fine with that -- a blocked coroutine
+  completes the workflow task and history does not grow while idle -- but the loop only considers
+  Continue-As-New between commands, so an actor whose handler waits without bound cannot rotate
+  while asks, tells and queries keep appending history. Prefer a finite timeout and re-wait in a
+  loop on `ErrEventTimeout`.
 - Delivery:
-  - `actors.DeliverEvent(ctx, ref, name, payload)` from clients/gateways. Unlike `InvokeCommand`, it
-    only signals a running workflow and never signal-with-starts one.
+  - `actors.DeliverEvent(ctx, ref, name, payload)` from clients/gateways. With the runtime's
+    invokers it only signals a running workflow and never signal-with-starts one; a third-party
+    `ClientInvoker` that does not implement `EventDeliverer` falls back to `InvokeCommand`, whose
+    contract does start the actor.
   - `actors.SendEvent(ctx, ref, name, payload)` from inside another actor (same namespace only).
   - `testkit`: `WhenEvent(name, payload)` on scenarios, and `testkit.NewMemoryCtx` for in-process
     handler unit tests with a channel-based `DeliverEvent`.

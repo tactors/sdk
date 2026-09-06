@@ -373,3 +373,51 @@ func TestDeliverEventRejectsInvalidName(t *testing.T) {
 	require.Error(t, inv.DeliverEvent(context.Background(), actors.ARef("kind", "wf"), "", nil))
 	require.Empty(t, fake.signalCalls)
 }
+
+// The selector fires the first ready case in registration order. With several
+// commands buffered behind a long wait -- the normal state after WaitForEvent
+// -- registration order decides which runs first, and if that order came from
+// ranging over a map it would change on every replay. Two named commands
+// arrive while A is parked; the order they run in must be the same on every
+// run, and it must be the sorted one so a replay can predict it.
+func TestQueuedCommandsDispatchInDeterministicOrder(t *testing.T) {
+	first := actors.CommandNamed("aaa-first", func(ctx actors.Ctx, st *eventActorState, _ eventNoteCommand) (struct{}, error) {
+		st.Log = append(st.Log, "cmd:aaa-first")
+		return struct{}{}, nil
+	})
+	second := actors.CommandNamed("zzz-second", func(ctx actors.Ctx, st *eventActorState, _ eventNoteCommand) (struct{}, error) {
+		st.Log = append(st.Log, "cmd:zzz-second")
+		return struct{}{}, nil
+	})
+	waitSignal := actors.TypeKeyOf(eventWaitCommand{})
+	stopSignal := actors.TypeKeyOf(stopLoopCommand{})
+
+	run := func() []string {
+		suite := testsuite.WorkflowTestSuite{}
+		env := suite.NewTestWorkflowEnvironment()
+		runner := registerActorWorkflow(t, env, newEventActor("event-order", nil, first, second))
+		var after eventActorState
+		env.RegisterDelayedCallback(func() {
+			env.SignalWorkflow(waitSignal, eventWaitCommand{Tag: "A", Event: "E", Timeout: time.Hour})
+		}, time.Millisecond)
+		// Deliberately delivered in reverse of sorted order, so arrival order
+		// and sorted order disagree and only one of them can win.
+		env.RegisterDelayedCallback(func() { env.SignalWorkflow("zzz-second", eventNoteCommand{}) }, 2*time.Millisecond)
+		env.RegisterDelayedCallback(func() { env.SignalWorkflow("aaa-first", eventNoteCommand{}) }, 3*time.Millisecond)
+		env.RegisterDelayedCallback(func() {
+			env.SignalWorkflow(eventSignal(t, "E"), approvalEvent{Approver: "bob", OK: true})
+		}, 4*time.Millisecond)
+		env.RegisterDelayedCallback(func() { after = queryEventState(t, env) }, 5*time.Millisecond)
+		env.RegisterDelayedCallback(func() { env.SignalWorkflow(stopSignal, stopLoopCommand{}) }, 6*time.Millisecond)
+		env.ExecuteWorkflow(runner.Workflow(), "event-order-1", struct{}{})
+		require.NoError(t, env.GetWorkflowError())
+		return after.Log
+	}
+
+	want := []string{"wait:A:start", "wait:A:done", "cmd:aaa-first", "cmd:zzz-second"}
+	// Map iteration order varies per process and per iteration; a dozen runs
+	// is enough for an unsorted loop to show both orders.
+	for i := 0; i < 12; i++ {
+		require.Equal(t, want, run(), "run %d dispatched queued commands in a different order", i)
+	}
+}

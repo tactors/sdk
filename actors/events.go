@@ -73,9 +73,11 @@ type EventDeliverer interface {
 // DeliverEvent pushes a named event into a running actor from outside the
 // workflow (HTTP gateways, webhook receivers, approval UIs). The payload is
 // encoded with the same codec as command payloads and is buffered by the
-// runtime until a handler calls Ctx.WaitForEvent(name, ...). Delivering to an
-// actor that is not running does not start it; the runtime reports its
-// not-found error instead.
+// runtime until a handler calls Ctx.WaitForEvent(name, ...). With the
+// runtime's invokers, delivering to an actor that is not running does not
+// start it; the not-found error is returned. A ClientInvoker that does not
+// implement EventDeliverer falls back to InvokeCommand, whose contract does
+// start the actor.
 func DeliverEvent(ctx context.Context, ref Ref, name string, payload any) error {
 	signal, err := EventSignalName(name)
 	if err != nil {

@@ -111,3 +111,18 @@ func TestSendEventRequiresRuntimeSupport(t *testing.T) {
 	require.ErrorIs(t, SendEvent(nil, Ref{}, "approve", nil), ErrUnsupported)
 	require.ErrorIs(t, SendEvent(&eventStubCtx{}, Ref{}, "approve", nil), ErrUnsupported)
 }
+
+// The event side refuses the reserved prefix; a command registered under it
+// would share a signal channel with an event and steal its payload. Both
+// halves of the namespace have to hold.
+func TestCommandsCannotUseTheReservedSignalPrefix(t *testing.T) {
+	require.PanicsWithValue(t,
+		`actors: command name "__actors_event:approve" must not use the reserved __actors_ prefix`,
+		func() {
+			NewStateful("reserved", func() struct{} { return struct{}{} }).
+				With(CommandNamed("__actors_event:approve", func(Ctx, *struct{}, struct{}) (struct{}, error) {
+					return struct{}{}, nil
+				})).
+				Build()
+		})
+}

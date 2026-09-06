@@ -200,3 +200,27 @@ func TestWaitForEventReplayDetectsDivergence(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "nondeterministic")
 }
+
+// The twin above proves a missing StartTimer is caught. It does not prove the
+// timer is cancelled when the event wins: the replayer tolerates a trailing
+// CancelTimer that the history lacks, so a leaked timer passed it. Dropping
+// only TimerCanceled from the history makes the correct code's cancel an
+// "extra replay command" -- which is exactly the error a leaked timer must
+// NOT produce, so this fails when the cancel is missing.
+func TestWaitForEventReplayDetectsLeakedTimer(t *testing.T) {
+	runner := NewRunner(newReplayEventActor())
+	history := buildWaitForEventHistory(t, runner.Description().Kind, "event-replay-3", time.Hour)
+	var kept []*historypb.HistoryEvent
+	for _, evt := range history.Events {
+		if evt.GetTimerCanceledEventAttributes() != nil {
+			continue
+		}
+		evt.EventId = int64(len(kept) + 1)
+		kept = append(kept, evt)
+	}
+	history.Events = kept
+	replayer := newEventReplayer(t, runner)
+	err := replayer.ReplayWorkflowHistory(nil, history)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "extra replay command for CancelTimer")
+}

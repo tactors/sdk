@@ -39,13 +39,16 @@ type Ctx interface {
 	// are buffered and returned immediately; an event that arrives after a
 	// wait timed out stays buffered for the next WaitForEvent on that name.
 	//
-	// Event names live in their own namespace (see EventSignalPrefix), so an
-	// event cannot collide with a command name or an internal runtime signal.
+	// Event names live in their own namespace (see EventSignalPrefix); the
+	// prefix is refused for events and for command names alike, so within
+	// those rules an event cannot collide with a command or a runtime signal.
 	//
-	// While a command handler is suspended in WaitForEvent, other commands
-	// addressed to the actor queue and run after the handler returns; this is
-	// the ordinary actor mailbox semantics. Do not call WaitForEvent from
-	// query handlers, which must not block.
+	// While a handler is suspended here, commands delivered as signals queue
+	// and run after it returns, in sorted name order. Commands arriving via
+	// Tell/Ask or Updates run in their own coroutine and are not held back --
+	// the runtime has always executed those concurrently with a blocking
+	// handler, and this wait only makes the window long. Do not call
+	// WaitForEvent from query handlers, which must not block.
 	WaitForEvent(name string, timeout time.Duration) (any, error)
 }
 

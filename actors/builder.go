@@ -286,6 +286,13 @@ func (a CommandAction[S]) apply(desc *Description) {
 	if key == "" {
 		panic("actors: command action missing name")
 	}
+	// Commands and events are signals in one namespace; the event side refuses
+	// the reserved prefix, and this is the other half. A command registered as
+	// "__actors_event:approve" would share a channel with the event "approve",
+	// and whichever selector was active would consume the other's payload.
+	if strings.HasPrefix(key, "__actors_") {
+		panic(fmt.Sprintf("actors: command name %q must not use the reserved __actors_ prefix", key))
+	}
 	if _, exists := desc.Commands[key]; exists {
 		panic(fmt.Sprintf("actors: command %q already registered", key))
 	}

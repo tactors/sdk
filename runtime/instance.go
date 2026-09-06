@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/tactors/sdk/actors"
@@ -208,10 +209,14 @@ func (i *temporalInstance) driveCommandLoop(ctx workflow.Context, wfCtx *wfConte
 	logger := workflow.GetLogger(ctx)
 	var exitErr error
 	selector := workflow.NewSelector(ctx)
-	for name, ch := range chans {
+	// The selector fires the first ready case in registration order, so when
+	// several commands are buffered -- which is the normal state after a
+	// handler returns from a long WaitForEvent -- registration order decides
+	// which runs first. Ranging over the map would re-randomise that on every
+	// replay and turn a backlog into a nondeterminism error.
+	for _, name := range sortedCommandNames(chans) {
+		ch := chans[name]
 		spec := i.desc.Commands[name]
-		name := name
-		ch := ch
 		selector.AddReceive(ch, i.commandReceiveHandler(ctx, wfCtx, state, spec, name, logger, chans, &exitErr))
 	}
 	selector.AddReceive(continueCh, i.continueReceiveHandler(ctx, wfCtx, state, chans, &exitErr))
@@ -869,4 +874,15 @@ func (i *temporalInstance) sendContinueReply(ctx workflow.Context, req continueR
 	if err := fut.Get(ctx, nil); err != nil {
 		workflow.GetLogger(ctx).Error("continue reply delivery failed", "workflow_id", req.ReplyWorkflow, "signal", target, "error", err)
 	}
+}
+
+// sortedCommandNames fixes the order in which command channels are offered to
+// a selector. See driveCommandLoop.
+func sortedCommandNames(chans map[string]workflow.ReceiveChannel) []string {
+	names := make([]string, 0, len(chans))
+	for name := range chans {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
