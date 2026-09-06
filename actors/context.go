@@ -27,6 +27,29 @@ type Ctx interface {
 	Correlation() CorrelationData
 	SetCorrelation(CorrelationData)
 	SnapshotInfo() SnapshotInfo
+	// WaitForEvent suspends the current handler until an event named `name`
+	// is delivered to this actor (via DeliverEvent / SendEvent), or until
+	// timeout elapses (timeout <= 0 means no timeout). It returns the event
+	// payload as decoded by the SDK codec; use WaitForEventAs for a typed
+	// result. On timeout the error satisfies errors.Is(err, ErrEventTimeout).
+	//
+	// The wait is durable: on Temporal it is a signal channel receive plus a
+	// workflow timer, so it survives worker restarts and replays
+	// deterministically. Events delivered before the handler starts waiting
+	// are buffered and returned immediately; an event that arrives after a
+	// wait timed out stays buffered for the next WaitForEvent on that name.
+	//
+	// Event names live in their own namespace (see EventSignalPrefix); the
+	// prefix is refused for events and for command names alike, so within
+	// those rules an event cannot collide with a command or a runtime signal.
+	//
+	// While a handler is suspended here, commands delivered as signals queue
+	// and run after it returns, in sorted name order. Commands arriving via
+	// Tell/Ask or Updates run in their own coroutine and are not held back --
+	// the runtime has always executed those concurrently with a blocking
+	// handler, and this wait only makes the window long. Do not call
+	// WaitForEvent from query handlers, which must not block.
+	WaitForEvent(name string, timeout time.Duration) (any, error)
 }
 
 // ActivityFuture is a placeholder for the runtime specific promise returned by Activity.

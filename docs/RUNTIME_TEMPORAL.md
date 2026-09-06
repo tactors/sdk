@@ -217,6 +217,55 @@ runtime.ConfigurePayloadCodecs(offload, codec)
   - `actors.NonRetryable(err)` tells the runtime to stop retries immediately.
   - `actors.RetryAfter(err, d)` requests a durable delay before reprocessing the same message.
 
+## Waiting for external events
+
+`ctx.WaitForEvent(name, timeout)` suspends a command handler until an event named `name` is
+delivered to the actor, or until `timeout` elapses (`<= 0` means wait forever). It is the primitive
+for human-approval pauses and webhook ingestion.
+
+- Durable and deterministic: the Temporal implementation is a `GetSignalChannel` receive plus a
+  workflow timer inside a `Selector`. It survives worker restarts and replays without divergence.
+- Payloads use the same CBOR data converter as commands; `actors.WaitForEventAs[T]` decodes the
+  value into a typed struct.
+- Timeout returns an error that satisfies `errors.Is(err, actors.ErrEventTimeout)`. Handle it in the
+  handler—an unhandled plain error is treated like any other command failure by the loop.
+- If the command itself has `WithTimeout`, or the workflow is cancelled, the wait unblocks with the
+  cancellation error instead.
+- Namespacing: event `approve` travels on the signal `__actors_event:approve`
+  (`actors.EventSignalName`). Names starting with `__actors_` are rejected on both sides: an
+  event may not use the prefix, and a command may not be registered under it. Within those rules an
+  event cannot collide with a command or with the runtime's own signals.
+- Mailbox semantics, precisely: commands delivered as **signals** (`InvokeCommand`, `testkit.When*`)
+  stay queued in their channels while a handler is suspended and run after it returns, in sorted
+  command-name order. Commands that arrive through the **Tell/Ask request signals or Temporal
+  Updates run in their own coroutine and are not held back**: they execute concurrently with the
+  suspended handler on the same state, as they always have for any blocking handler. Queries likewise
+  observe whatever the suspended handler has already written. `WaitForEvent` does not change this
+  model; it makes the window it opens long enough to matter, so a handler that suspends should not
+  leave state half-applied across the wait.
+- Events delivered before a handler waits are buffered and returned immediately; an event that
+  arrives after a wait timed out stays buffered for the next `WaitForEvent` on that name.
+- Continue-As-New: buffered events are not carried across a snapshot -- the drain covers command
+  channels only, and Temporal offers no way to re-inject a signal into the new run. A handler that
+  is **suspended on the Tell/Ask/Update path when the loop continues-as-new is abandoned**: its
+  command sits in no channel to drain, its partial state is what gets snapshotted, and it never
+  returns. Signal-path handlers are safe because the loop cannot reach the snapshot while one is
+  running.
+- `timeout <= 0` is a wait without limit. Temporal itself is fine with that -- a blocked coroutine
+  completes the workflow task and history does not grow while idle -- but the loop only considers
+  Continue-As-New between commands, so an actor whose handler waits without bound cannot rotate
+  while asks, tells and queries keep appending history. Prefer a finite timeout and re-wait in a
+  loop on `ErrEventTimeout`.
+- Delivery:
+  - `actors.DeliverEvent(ctx, ref, name, payload)` from clients/gateways. With the runtime's
+    invokers it only signals a running workflow and never signal-with-starts one; a third-party
+    `ClientInvoker` that does not implement `EventDeliverer` falls back to `InvokeCommand`, whose
+    contract does start the actor.
+  - `actors.SendEvent(ctx, ref, name, payload)` from inside another actor (same namespace only).
+  - `testkit`: `WhenEvent(name, payload)` on scenarios, and `testkit.NewMemoryCtx` for in-process
+    handler unit tests with a channel-based `DeliverEvent`.
+- Do not call `WaitForEvent` from query handlers; they must not block.
+
 ## Diagnostics queries
 
 - Every actor automatically responds to two reserved Temporal queries:
@@ -255,8 +304,8 @@ runtime.ConfigurePayloadCodecs(offload, codec)
 drive workflows deterministically:
 
 - Registers workflows and activities automatically, assigning a deterministic workflow ID.
-- Offers `WhenCommand` to enqueue typed signals, `Advance` to jump fake time, and `QueryWorkflow` to
-  run typed queries mid-scenario.
+- Offers `WhenCommand` to enqueue typed signals, `WhenEvent` to deliver external events, `Advance`
+  to jump fake time, and `QueryWorkflow` to run typed queries mid-scenario.
 - `Run(t)` executes the workflow and returns the workflow error plus the captured outcome for further
   inspection.
 
@@ -270,6 +319,7 @@ The runtime owns these signals—avoid defining your own handlers under the same
 - `__actors_ask_reply`
 - `__actors_continue_request`
 - `__actors_continue_reply`
+- `__actors_event:<name>` (one per event name used with `WaitForEvent`)
 
 ## Extensibility
 

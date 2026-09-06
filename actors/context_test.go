@@ -38,6 +38,10 @@ type stubCtx struct {
 	versionOverride *int
 	versionChangeID string
 	correlation     actors.CorrelationData
+	waitedEvent     string
+	waitedTimeout   time.Duration
+	eventPayload    any
+	eventErr        error
 }
 
 func (stubCtx) ActorID() string           { return "test" }
@@ -51,6 +55,11 @@ func (s *stubCtx) Version(changeID string, defaultVersion, newVersion int) int {
 	return newVersion
 }
 func (stubCtx) Logger() actors.Logger { return nil }
+func (s *stubCtx) WaitForEvent(name string, timeout time.Duration) (any, error) {
+	s.waitedEvent = name
+	s.waitedTimeout = timeout
+	return s.eventPayload, s.eventErr
+}
 
 func (s *stubCtx) SpawnOneShot(payload any, opts ...actors.SpawnOption) (any, error) {
 	return s.oneshotResult, nil

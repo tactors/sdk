@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/mock"
+	"github.com/tactors/sdk/actors"
 	"github.com/tactors/sdk/runtime"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
@@ -62,6 +63,16 @@ func (s *TemporalScenario) Env() *testsuite.TestWorkflowEnvironment {
 func (s *TemporalScenario) When(name string, payload any) *TemporalScenario {
 	s.steps = append(s.steps, temporalStep{kind: stepTemporalSignal, name: name, payload: payload})
 	return s
+}
+
+// WhenEvent schedules delivery of a named external event (see
+// actors.DeliverEvent). The signal name is namespaced via actors.EventSignalName.
+func (s *TemporalScenario) WhenEvent(name string, payload any) *TemporalScenario {
+	signal, err := actors.EventSignalName(name)
+	if err != nil {
+		panic(err)
+	}
+	return s.When(signal, payload)
 }
 
 // Advance moves the fake clock forward deterministically.

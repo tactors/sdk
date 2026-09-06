@@ -1140,6 +1140,91 @@ func (c *wfContext) SendCommand(ref actors.Ref, payload any) error {
 	return fut.Get(c.workflowCtx, nil)
 }
 
+// WaitForEvent implements actors.Ctx. It blocks the calling workflow coroutine
+// on the namespaced event signal channel and (optionally) a workflow timer,
+// using only replay-safe primitives (GetSignalChannel, NewTimer, NewSelector).
+//
+// Interaction with the command loop (instance.go driveCommandLoop): command
+// handlers run synchronously inside the loop's selector callback, so while a
+// handler is parked here the loop is not selecting and other command signals
+// simply stay buffered in their channels; they are dispatched once the handler
+// returns. The wait itself uses a separate selector on a channel the command
+// loop never reads, so the two selectors cannot deadlock each other.
+//
+// The wait honours the handler's context: when the command times out (see
+// invokeCommand) or the workflow is cancelled, it returns the cancellation
+// error instead of ErrEventTimeout.
+func (c *wfContext) WaitForEvent(name string, timeout time.Duration) (any, error) {
+	signal, err := actors.EventSignalName(name)
+	if err != nil {
+		return nil, err
+	}
+	ctx := c.workflowCtx
+	ch := workflow.GetSignalChannel(ctx, signal)
+	var (
+		timerCtx workflow.Context
+		cancel   workflow.CancelFunc
+		timer    workflow.Future
+	)
+	if timeout > 0 {
+		timerCtx, cancel = workflow.WithCancel(ctx)
+		timer = workflow.NewTimer(timerCtx, timeout)
+		defer cancel()
+	}
+	selector := workflow.NewSelector(ctx)
+	var payload any
+	var waitErr error
+	selector.AddReceive(ch, func(rc workflow.ReceiveChannel, more bool) {
+		rc.Receive(ctx, &payload)
+		if cancel != nil {
+			cancel()
+		}
+	})
+	if timer != nil {
+		selector.AddFuture(timer, func(f workflow.Future) {
+			if err := f.Get(ctx, nil); err != nil {
+				// Timer cancelled because the handler context was cancelled.
+				waitErr = err
+				return
+			}
+			waitErr = fmt.Errorf("%w: event %q after %s", actors.ErrEventTimeout, name, timeout)
+		})
+	}
+	if done := ctx.Done(); done != nil {
+		selector.AddReceive(done, func(workflow.ReceiveChannel, bool) {
+			waitErr = ctx.Err()
+			if waitErr == nil {
+				waitErr = temporal.NewCanceledError("actors: event wait cancelled")
+			}
+		})
+	}
+	selector.Select(ctx)
+	if waitErr != nil {
+		return nil, waitErr
+	}
+	return payload, nil
+}
+
+// SendEvent delivers a named event to another actor in the same namespace via
+// the namespaced event signal. Cross-namespace delivery is not supported from
+// inside a workflow; use actors.DeliverEvent from a client instead.
+func (c *wfContext) SendEvent(ref actors.Ref, name string, payload any) error {
+	if ref.ID == "" {
+		return fmt.Errorf("actors: target ref ID is empty")
+	}
+	signal, err := actors.EventSignalName(name)
+	if err != nil {
+		return err
+	}
+	if _, _, crossNS, err := c.namespaceInfo(ref); err != nil {
+		return err
+	} else if crossNS {
+		return fmt.Errorf("actors: cross-namespace event delivery is not supported from a workflow")
+	}
+	fut := workflow.SignalExternalWorkflow(c.workflowCtx, ref.ID, "", signal, payload)
+	return fut.Get(c.workflowCtx, nil)
+}
+
 func (c *wfContext) applySignalDeadline(desc *actors.Description, command string, meta *actors.MessageMetadata) {
 	if desc == nil || meta == nil {
 		return

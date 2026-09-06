@@ -90,3 +90,6 @@ func (s *scheduleCtx) SetCorrelation(data actors.CorrelationData) {
 	s.correlation = data
 }
 func (s *scheduleCtx) SnapshotInfo() actors.SnapshotInfo { return actors.SnapshotInfo{} }
+func (s *scheduleCtx) WaitForEvent(string, time.Duration) (any, error) {
+	return nil, actors.ErrUnsupported
+}

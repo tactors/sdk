@@ -90,10 +90,11 @@ func (i *temporalInstance) drainSignals(ctx workflow.Context, chans map[string]w
 	var drained []snapshotSignal
 	var drainErr error
 	selector := workflow.NewSelector(ctx)
-	for name, ch := range chans {
+	// Same reason as driveCommandLoop: drained order is snapshot order, and it
+	// has to replay identically.
+	for _, name := range sortedCommandNames(chans) {
+		ch := chans[name]
 		spec := i.desc.Commands[name]
-		name := name
-		ch := ch
 		selector.AddReceive(ch, func(rc workflow.ReceiveChannel, more bool) {
 			if drainErr != nil {
 				return
