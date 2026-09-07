@@ -3,6 +3,7 @@ package runtime
 import (
 	"errors"
 	"fmt"
+	"go.temporal.io/sdk/converter"
 	"testing"
 	"time"
 
@@ -343,4 +344,31 @@ func TestRestoreSnapshotMemoDecodeError(t *testing.T) {
 	err := env.GetWorkflowError()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "snapshotRecord")
+}
+
+// The actor workflow is func(ctx, id string, init any), so continuing it takes
+// two arguments. This path passed one, and the next generation would have read
+// the snapshot args as its actor id and started with no init -- every automatic
+// rotation silently losing the actor's identity and its state. The test
+// environment never runs the generation that would receive them, which is why
+// nothing caught it; the arguments on the error are what can be asserted here.
+func TestSnapshotAndContinuePassesActorIDAndArgs(t *testing.T) {
+	desc := buildTestDescription()
+	inst := newTemporalInstance(desc, nil)
+	state := &testCommandState{Sum: 5}
+
+	_, err := runSnapshotAndContinueWorkflow(t, inst, desc, state, map[string]int{"sum": 5})
+	require.Error(t, err)
+	var contErr *workflow.ContinueAsNewError
+	require.True(t, errors.As(err, &contErr))
+	require.NotNil(t, contErr.Input)
+	require.Len(t, contErr.Input.Payloads, 2, "continue-as-new must carry both the actor id and the init payload")
+
+	converter := converter.GetDefaultDataConverter()
+	var id string
+	require.NoError(t, converter.FromPayload(contErr.Input.Payloads[0], &id))
+	require.Equal(t, "wf", id, "the first argument is the actor id, not the snapshot")
+	var init map[string]int
+	require.NoError(t, converter.FromPayload(contErr.Input.Payloads[1], &init))
+	require.Equal(t, map[string]int{"sum": 5}, init)
 }

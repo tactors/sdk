@@ -180,6 +180,22 @@ runtime.ConfigurePayloadCodecs(offload, codec)
   with the original init payload so no messages are lost.
 - External orchestrators can call `actors.RequestContinueAsNew(ctx, ref, ...)` to trigger the same
   snapshot/Continue-As-New path on another actor, optionally overriding the next init payload.
+- **A rotation never starts while a command handler is still running.** All four triggers -- the
+  `SnapshotEvery` counter, Temporal's rotation hint, a client continue request, and a handler
+  returning `actors.ContinueAsNew` -- only *mark* the rotation as pending; the loop performs it, and
+  only once every handler has returned. Handlers reached over the Tell/Ask request signals or over
+  Temporal Updates run on their own coroutines, so without this the loop could rotate out from
+  under one (see the `WaitForEvent` section below).
+- Deferral is not a lost rotation: the loop keeps dispatching commands while one is pending and
+  runs it as soon as the last handler returns, so `SnapshotEvery` is a floor, not an exact cadence,
+  and an actor can process more than `Every` commands in a run. The standing cost is that an actor
+  whose handler blocks forever never rotates.
+- Only one rotation can be pending at a time. An `actors.RequestContinueAsNew` that arrives while
+  one is already queued -- by another continue request or by any other trigger -- is refused with
+  `actors: continue-as-new already pending` rather than being folded into a rotation that would not
+  answer it. If the actor stops (`actors.ErrStopLoop`) while a continue request is still deferred,
+  its caller is answered with `actors: actor stopped before the pending continue-as-new ran`
+  instead of being left waiting.
 
 ## Child orchestration
 
@@ -245,17 +261,27 @@ for human-approval pauses and webhook ingestion.
   leave state half-applied across the wait.
 - Events delivered before a handler waits are buffered and returned immediately; an event that
   arrives after a wait timed out stays buffered for the next `WaitForEvent` on that name.
-- Continue-As-New: buffered events are not carried across a snapshot -- the drain covers command
-  channels only, and Temporal offers no way to re-inject a signal into the new run. A handler that
-  is **suspended on the Tell/Ask/Update path when the loop continues-as-new is abandoned**: its
-  command sits in no channel to drain, its partial state is what gets snapshotted, and it never
-  returns. Signal-path handlers are safe because the loop cannot reach the snapshot while one is
-  running.
-- `timeout <= 0` is a wait without limit. Temporal itself is fine with that -- a blocked coroutine
-  completes the workflow task and history does not grow while idle -- but the loop only considers
-  Continue-As-New between commands, so an actor whose handler waits without bound cannot rotate
-  while asks, tells and queries keep appending history. Prefer a finite timeout and re-wait in a
-  loop on `ErrEventTimeout`.
+- Continue-As-New: **a suspended handler is never abandoned by a rotation.** The loop will not
+  continue-as-new while any handler is still running -- including one reached over the Tell/Ask
+  request signals or over a Temporal Update, whose command sits in no channel for the drain to
+  capture. The rotation is marked pending and taken as soon as the handler returns, so the snapshot
+  always captures finished state and an `Ask` caller still gets its reply. Buffered *events* are
+  still not carried across a snapshot: the drain covers command channels only, and Temporal offers
+  no way to re-inject a signal into the new run, so deliver an event to the new run if the wait it
+  was meant for has moved there.
+- `timeout <= 0` is a wait without limit, and it is now also a rotation that never happens. Temporal
+  itself is fine with a blocked coroutine -- it completes the workflow task and history does not
+  grow while idle -- but the loop defers Continue-As-New for as long as the handler is parked, so an
+  actor whose handler waits without bound cannot rotate while asks, tells and queries keep appending
+  history. This is the trade the guard makes deliberately: a rotation that is late is recoverable,
+  a handler that is silently dropped is not. Prefer a finite timeout and re-wait in a loop on
+  `ErrEventTimeout`.
+- Cancellation is not a rotation and is not covered by the guard: when the workflow is cancelled the
+  loop returns the cancellation error immediately. There is no snapshot and no next run, so there is
+  nothing to strand a handler in -- and because the wait also selects on `ctx.Done()`, a parked
+  handler is scheduled and observes the cancellation error before the run ends. Any state it writes
+  at that point dies with the run, and an `Ask` caller sees the workflow's cancellation rather than
+  a reply.
 - Delivery:
   - `actors.DeliverEvent(ctx, ref, name, payload)` from clients/gateways. With the runtime's
     invokers it only signals a running workflow and never signal-with-starts one; a third-party
