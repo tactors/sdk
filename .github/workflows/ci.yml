@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
+
+      # The runtime is workflow code: a data race here is a nondeterminism bug
+      # wearing a different hat, and the tests that would catch one are the
+      # concurrency tests in these three packages.
+      - name: Race detector
+        run: go test -race ./actors ./runtime ./testkit
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -s -l .)
+          if [ -n "$unformatted" ]; then
+            echo "$unformatted"
+            exit 1
+          fi
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Pinned rather than "latest" so a lint release cannot turn CI red on a
+      # day nobody touched the code, and so a local run and CI check with the
+      # same binary.
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.13.2

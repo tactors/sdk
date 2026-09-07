@@ -1,0 +1,37 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - bodyclose
+  exclusions:
+    rules:
+      # Table-driven tests routinely ignore errors that the assertion covers.
+      - path: _test\.go
+        linters:
+          - errcheck
+      # S1016 asks for a type conversion wherever two structs have identical
+      # fields. Several of those pairs here are a wire type and a domain type
+      # that happen to line up today; converting would couple them, so a change
+      # to one would silently flow into the serialized form. The explicit
+      # literal is the point.
+      - text: "S1016:"
+        linters:
+          - staticcheck
+      # Temporal deprecated the untyped search-attribute API in favour of
+      # GetTypedSearchAttributes / UpsertTypedSearchAttributes. Migrating is a
+      # behaviour change to how attributes are declared and read, not a rename,
+      # so it is its own piece of work rather than a drive-by. Scoped to these
+      # call sites so a new one is not silently admitted.
+      - path: runtime/context\.go
+        text: "SearchAttributes is deprecated"
+        linters:
+          - staticcheck

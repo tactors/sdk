@@ -67,7 +67,7 @@ func TestObservabilityHooks(t *testing.T) {
 	// reset to no-op
 	SetTracer(nil)
 	SetMeter(nil)
-	ctx, span = ActiveTracer().Start(ctx, "noop")
+	_, span = ActiveTracer().Start(ctx, "noop")
 	span.End(nil)
 	RecordCommandMetrics("kind", "cmd", time.Millisecond, nil)
 	RecordQueryMetrics("kind", "other", "status", time.Millisecond, nil)
