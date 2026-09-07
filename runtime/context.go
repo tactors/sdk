@@ -619,7 +619,7 @@ func (c *wfContext) QueryActor(ref actors.Ref, payload any) (any, error) {
 		return nil, err
 	}
 	if reply.Error != "" {
-		return nil, fmt.Errorf(reply.Error)
+		return nil, errors.New(reply.Error)
 	}
 	return reply.Payload, nil
 }
@@ -727,7 +727,7 @@ func (c *wfContext) askViaSignal(ref actors.Ref, payload any) (any, error) {
 		return nil, err
 	}
 	if reply.Error != "" {
-		return nil, fmt.Errorf(reply.Error)
+		return nil, errors.New(reply.Error)
 	}
 	return reply.Payload, nil
 }
@@ -803,7 +803,7 @@ func (c *wfContext) RequestContinueAsNew(ref actors.Ref, opts actors.ContinueAsN
 		return err
 	}
 	if reply.Error != "" {
-		return fmt.Errorf(reply.Error)
+		return errors.New(reply.Error)
 	}
 	return nil
 }

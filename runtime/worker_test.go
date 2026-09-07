@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
+	"testing/synctest"
 
 	"github.com/tactors/sdk/actors"
 	"go.temporal.io/sdk/activity"
@@ -43,37 +43,39 @@ func TestWorkerSetReusesQueues(t *testing.T) {
 }
 
 func TestWorkerSetStartAllStopsOnCancel(t *testing.T) {
-	stubs := []*stubWorker{{}, {}}
-	next := 0
-	set := newWorkerSetWithFactory(func(queue string, opts worker.Options) temporalWorker {
-		w := stubs[next]
-		w.opts = opts
-		next++
-		return w
-	}, WorkerConfig{})
+	synctest.Test(t, func(t *testing.T) {
+		stubs := []*stubWorker{{}, {}}
+		next := 0
+		set := newWorkerSetWithFactory(func(queue string, opts worker.Options) temporalWorker {
+			w := stubs[next]
+			w.opts = opts
+			next++
+			return w
+		}, WorkerConfig{})
 
-	actor := actors.NewStateful("queue-test", func() struct{} { return struct{}{} }).
-		With(
-			actors.ActivityNamed("noop", func(ctx context.Context, _ struct{}) (struct{}, error) {
-				return struct{}{}, nil
-			}),
-		).
-		Build()
-	if _, err := set.Register(actor, WorkerConfig{}); err != nil {
-		t.Fatalf("register actor: %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	if err := set.StartAll(ctx); err != nil {
-		t.Fatalf("StartAll: %v", err)
-	}
-	cancel()
-	time.Sleep(10 * time.Millisecond)
-	if stubs[0].startCount != 1 || stubs[0].stopCount == 0 {
-		t.Fatalf("workflow worker start/stop mismatch: %+v", stubs[0])
-	}
-	if stubs[1].startCount != 1 || stubs[1].stopCount == 0 {
-		t.Fatalf("activity worker start/stop mismatch: %+v", stubs[1])
-	}
+		actor := actors.NewStateful("queue-test", func() struct{} { return struct{}{} }).
+			With(
+				actors.ActivityNamed("noop", func(ctx context.Context, _ struct{}) (struct{}, error) {
+					return struct{}{}, nil
+				}),
+			).
+			Build()
+		if _, err := set.Register(actor, WorkerConfig{}); err != nil {
+			t.Fatalf("register actor: %v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		if err := set.StartAll(ctx); err != nil {
+			t.Fatalf("StartAll: %v", err)
+		}
+		cancel()
+		synctest.Wait()
+		if stubs[0].startCount != 1 || stubs[0].stopCount == 0 {
+			t.Fatalf("workflow worker start/stop mismatch: %+v", stubs[0])
+		}
+		if stubs[1].startCount != 1 || stubs[1].stopCount == 0 {
+			t.Fatalf("activity worker start/stop mismatch: %+v", stubs[1])
+		}
+	})
 }
 
 func TestWorkerSetStartAllIdempotent(t *testing.T) {
