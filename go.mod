@@ -1,6 +1,6 @@
 module github.com/tactors/sdk
 
-go 1.23.0
+go 1.25.0
 
 require (
 	github.com/fxamacker/cbor/v2 v2.7.0
