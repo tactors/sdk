@@ -57,10 +57,15 @@ func (i *temporalInstance) snapshotAndContinue(ctx workflow.Context, wfCtx *wfCo
 		return nil, fmt.Errorf("actors: workflow info unavailable")
 	}
 	i.processedSinceRotate = 0
-	if args == nil {
-		return nil, workflow.NewContinueAsNewError(ctx, info.WorkflowType.Name)
-	}
-	return args, workflow.NewContinueAsNewError(ctx, info.WorkflowType.Name, args)
+	// The actor workflow is func(ctx, id string, init any), so continuing it
+	// takes two arguments. This passed one: the next generation would have read
+	// the snapshot args as its actor id and started with no init at all --
+	// every automatic rotation silently losing the actor's identity and its
+	// state. The explicit ContinueAsNew path always passed both; only this one
+	// did not, and no test caught it because the test environment records that
+	// a rotation was requested without ever running the generation that would
+	// have received the arguments.
+	return args, workflow.NewContinueAsNewError(ctx, info.WorkflowType.Name, wfCtx.ref.ID, args)
 }
 
 func (i *temporalInstance) buildSnapshot(ctx workflow.Context, chans map[string]workflow.ReceiveChannel, state any) (snapshotRecord, error) {
