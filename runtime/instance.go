@@ -179,6 +179,7 @@ func (i *temporalInstance) buildWorkflowContext(ctx workflow.Context, id string,
 		activityQueue:     activityQueueFor(i.desc.Kind, i.desc),
 		tracer:            observability.ActiveTracer(),
 		routing:           i.routing,
+		handlersIdleCh:    workflow.NewBufferedChannel(ctx, 1),
 	}
 	if i.desc.SnapshotEvery > 0 {
 		wfCtx.snapshotInfo.Enabled = true
@@ -200,6 +201,27 @@ func (i *temporalInstance) buildWorkflowContext(ctx workflow.Context, id string,
 	return wfCtx, state, oneShotReq, nil
 }
 
+// rotationRequest is the single place a pending Continue-As-New is recorded,
+// whatever triggered it: the SnapshotEvery counter, Temporal's own rotation
+// hint, a client continue request, or a handler returning
+// actors.ContinueAsNew. Triggers only mark it; the rotation itself is
+// performed by the loop body, which is the one place that can tell whether any
+// handler is still in flight.
+type rotationRequest struct {
+	pending  bool
+	deferred bool
+	// request is set when a client asked for the rotation and is waiting for a
+	// reply; the reply is sent when the rotation actually happens.
+	request *continueRequest
+	// explicit carries the Continue-As-New error a handler returned itself.
+	// That path rotates without snapshotting, exactly as before.
+	explicit error
+}
+
+func (r *rotationRequest) clear() {
+	*r = rotationRequest{}
+}
+
 func (i *temporalInstance) driveCommandLoop(ctx workflow.Context, wfCtx *wfContext, state any) (any, error) {
 	chans := make(map[string]workflow.ReceiveChannel, len(i.desc.Commands))
 	for name := range i.desc.Commands {
@@ -208,6 +230,7 @@ func (i *temporalInstance) driveCommandLoop(ctx workflow.Context, wfCtx *wfConte
 	continueCh := workflow.GetSignalChannel(ctx, continueRequestSignal)
 	logger := workflow.GetLogger(ctx)
 	var exitErr error
+	var rotate rotationRequest
 	selector := workflow.NewSelector(ctx)
 	// The selector fires the first ready case in registration order, so when
 	// several commands are buffered -- which is the normal state after a
@@ -217,41 +240,132 @@ func (i *temporalInstance) driveCommandLoop(ctx workflow.Context, wfCtx *wfConte
 	for _, name := range sortedCommandNames(chans) {
 		ch := chans[name]
 		spec := i.desc.Commands[name]
-		selector.AddReceive(ch, i.commandReceiveHandler(ctx, wfCtx, state, spec, name, logger, chans, &exitErr))
+		selector.AddReceive(ch, i.commandReceiveHandler(ctx, wfCtx, state, spec, name, logger, &rotate, &exitErr))
 	}
-	selector.AddReceive(continueCh, i.continueReceiveHandler(ctx, wfCtx, state, chans, &exitErr))
+	selector.AddReceive(continueCh, i.continueReceiveHandler(ctx, wfCtx, &rotate))
 	selector.AddReceive(ctx.Done(), func(workflow.ReceiveChannel, bool) {
 		if exitErr == nil {
 			exitErr = temporal.NewCanceledError("actors: workflow canceled")
 		}
 		wfCtx.requestStop()
 	})
+	// Registered last so a ready command always wins: this case only exists to
+	// wake the loop when the last off-loop handler finishes and a deferred
+	// rotation can finally run. Without it a rotation deferred for a parked
+	// Tell/Ask/Update handler would sit until some unrelated signal arrived.
+	selector.AddReceive(wfCtx.handlersIdleCh, func(rc workflow.ReceiveChannel, _ bool) {
+		rc.Receive(ctx, nil)
+	})
+	// A rotation can now outlive the turn that requested it, so a stop must not
+	// leave a continue caller waiting on a reply that will never come.
+	stopping := func() bool {
+		if !wfCtx.stopRequested() {
+			return false
+		}
+		if rotate.request != nil {
+			req := *rotate.request
+			rotate.clear()
+			i.sendContinueReply(ctx, req, continueReply{
+				ID:    req.ID,
+				Error: "actors: actor stopped before the pending continue-as-new ran",
+			})
+		}
+		return true
+	}
 	for {
-		if wfCtx.stopRequested() {
+		if stopping() {
 			return nil, nil
 		}
 		selector.Select(ctx)
 		if exitErr != nil {
 			return nil, exitErr
 		}
-		info := workflow.GetInfo(ctx)
-		if info != nil && info.GetContinueAsNewSuggested() {
-			if i.desc.SnapshotArgs == nil {
-				logger.Warn("temporal: continue-as-new suggested but snapshot not configured")
-			} else {
-				if err := workflow.Await(ctx, func() bool { return workflow.AllHandlersFinished(ctx) }); err != nil {
-					return nil, err
-				}
-				logger.Info("temporal: continue-as-new suggested by server")
-				if _, err := i.snapshotAndContinue(ctx, wfCtx, state, chans, nil); err != nil {
-					return nil, err
+		if !rotate.pending {
+			info := workflow.GetInfo(ctx)
+			if info != nil && info.GetContinueAsNewSuggested() {
+				if i.desc.SnapshotArgs == nil {
+					logger.Warn("temporal: continue-as-new suggested but snapshot not configured")
+				} else {
+					logger.Info("temporal: continue-as-new suggested by server")
+					rotate.pending = true
 				}
 			}
 		}
-		if wfCtx.stopRequested() {
+		if rotate.pending {
+			if err := i.performRotation(ctx, wfCtx, state, chans, &rotate, logger); err != nil {
+				return nil, err
+			}
+		}
+		if stopping() {
 			return nil, nil
 		}
 	}
+}
+
+// handlersIdle reports whether it is safe to continue-as-new right now. Our own
+// counter covers handlers reached over the Tell/Ask request coroutines and over
+// Temporal Updates; AllHandlersFinished is kept as well because it is the
+// contract Temporal itself defines for Update handlers.
+func (i *temporalInstance) handlersIdle(ctx workflow.Context, wfCtx *wfContext) bool {
+	return wfCtx.handlersRunning() == 0 && workflow.AllHandlersFinished(ctx)
+}
+
+// performRotation runs a pending rotation, or defers it if a handler is still
+// running. Deferring is the whole point: a handler parked in WaitForEvent that
+// was reached over Tell/Ask/Update is not in any command channel, so rotating
+// now would drop it silently and snapshot its half-applied state. The loop
+// keeps serving commands while the rotation is deferred and retries as soon as
+// the last handler returns, so this costs progress, not correctness. The
+// standing cost is that an actor whose handler waits without bound cannot
+// rotate -- the same unbounded-wait hazard `timeout <= 0` already carries.
+//
+// A nil return means "nothing rotated yet, keep looping"; a non-nil return is
+// the Continue-As-New error that ends this run.
+func (i *temporalInstance) performRotation(
+	ctx workflow.Context,
+	wfCtx *wfContext,
+	state any,
+	chans map[string]workflow.ReceiveChannel,
+	rotate *rotationRequest,
+	logger log.Logger,
+) error {
+	if !i.handlersIdle(ctx, wfCtx) {
+		if !rotate.deferred {
+			rotate.deferred = true
+			logger.Info("temporal: continue-as-new deferred until running handlers finish",
+				"handlers", wfCtx.handlersRunning())
+		}
+		return nil
+	}
+	if err := rotate.explicit; err != nil {
+		rotate.clear()
+		wfCtx.requestStop()
+		return err
+	}
+	if rotate.request != nil {
+		req := *rotate.request
+		value, err := wfCtx.withMessageMetadata(req.Envelope, func() (any, error) {
+			return i.snapshotAndContinue(ctx, wfCtx, state, chans, req.Init)
+		})
+		reply := continueReply{ID: req.ID, Init: value}
+		if err != nil && !workflow.IsContinueAsNewError(err) {
+			reply.Error = err.Error()
+		}
+		i.sendContinueReply(ctx, req, reply)
+		rotate.clear()
+		if err != nil && workflow.IsContinueAsNewError(err) {
+			wfCtx.requestStop()
+			return err
+		}
+		return nil
+	}
+	_, err := i.snapshotAndContinue(ctx, wfCtx, state, chans, nil)
+	rotate.clear()
+	if err != nil {
+		wfCtx.requestStop()
+		return err
+	}
+	return nil
 }
 
 func (i *temporalInstance) commandReceiveHandler(
@@ -261,7 +375,7 @@ func (i *temporalInstance) commandReceiveHandler(
 	spec actors.CommandSpec,
 	name string,
 	logger log.Logger,
-	chans map[string]workflow.ReceiveChannel,
+	rotate *rotationRequest,
 	exitErr *error,
 ) func(workflow.ReceiveChannel, bool) {
 	return func(c workflow.ReceiveChannel, more bool) {
@@ -276,8 +390,10 @@ func (i *temporalInstance) commandReceiveHandler(
 			return err
 		}(); err != nil {
 			if workflow.IsContinueAsNewError(err) {
-				*exitErr = err
-				wfCtx.requestStop()
+				// Queued rather than returned: another handler may still be
+				// parked, and the loop body decides when it is safe to rotate.
+				rotate.pending = true
+				rotate.explicit = err
 				return
 			}
 			if inner, ok := actors.AsBusinessError(err); ok {
@@ -305,11 +421,7 @@ func (i *temporalInstance) commandReceiveHandler(
 		if i.desc.SnapshotArgs != nil && i.desc.SnapshotEvery > 0 {
 			i.processedSinceRotate++
 			if i.processedSinceRotate >= i.desc.SnapshotEvery {
-				if _, err := i.snapshotAndContinue(ctx, wfCtx, state, chans, nil); err != nil {
-					*exitErr = err
-				}
-				wfCtx.requestStop()
-				return
+				rotate.pending = true
 			}
 		}
 	}
@@ -318,27 +430,24 @@ func (i *temporalInstance) commandReceiveHandler(
 func (i *temporalInstance) continueReceiveHandler(
 	ctx workflow.Context,
 	wfCtx *wfContext,
-	state any,
-	chans map[string]workflow.ReceiveChannel,
-	exitErr *error,
+	rotate *rotationRequest,
 ) func(workflow.ReceiveChannel, bool) {
 	return func(rc workflow.ReceiveChannel, more bool) {
 		var req continueRequest
 		rc.Receive(ctx, &req)
-		value, err := wfCtx.withMessageMetadata(req.Envelope, func() (any, error) {
-			return i.snapshotAndContinue(ctx, wfCtx, state, chans, req.Init)
-		})
-		initArgs := value
-		reply := continueReply{ID: req.ID, Init: initArgs}
-		if err != nil && !workflow.IsContinueAsNewError(err) {
-			reply.Error = err.Error()
-		}
-		i.sendContinueReply(ctx, req, reply)
-		if err != nil && workflow.IsContinueAsNewError(err) {
-			*exitErr = err
-			wfCtx.requestStop()
+		if rotate.pending {
+			// A rotation is already queued -- possibly deferred behind a
+			// running handler. Taking this request over would either strand
+			// the earlier caller's reply or strand this one behind a rotation
+			// that answers nobody, so refuse it out loud instead.
+			i.sendContinueReply(ctx, req, continueReply{
+				ID:    req.ID,
+				Error: "actors: continue-as-new already pending",
+			})
 			return
 		}
+		rotate.pending = true
+		rotate.request = &req
 	}
 }
 
@@ -491,6 +600,10 @@ func (i *temporalInstance) decodeCommandPayload(raw []byte, spec actors.CommandS
 }
 
 func (i *temporalInstance) handleCommand(ctx workflow.Context, wfCtx *wfContext, state any, spec actors.CommandSpec, payload any, logger log.Logger, name string, meta actors.MessageMetadata) (result any, err error) {
+	// Counted for the whole invocation, validator included, so the command loop
+	// never rotates out from under a handler running on another coroutine.
+	wfCtx.beginHandler()
+	defer wfCtx.endHandler()
 	if spec.Validator != nil {
 		if validationErr := spec.Validator(payload); validationErr != nil {
 			return nil, actors.BusinessError(validationErr)
@@ -710,13 +823,22 @@ func extractStartEnvelope(value any) (startEnvelope, bool) {
 }
 
 func (i *temporalInstance) startSignalHandlers(ctx workflow.Context, wfCtx *wfContext, state any) {
+	// The request loops are bracketed for their whole turn, not just the
+	// handleCommand call inside them: delivering the ask/query reply is a
+	// blocking SignalExternalWorkflow that happens after the handler returns,
+	// and rotating in that window would lose the reply the caller is waiting
+	// for. The reply-delivery loops below never block, so they are not counted.
 	startSignalLoop(ctx, queryRequestSignal, func(loopCtx workflow.Context, req queryRequest) {
+		wfCtx.beginHandler()
+		defer wfCtx.endHandler()
 		i.handleQueryRequest(loopCtx, wfCtx, state, req)
 	})
 	startSignalLoop(ctx, queryReplySignal, func(_ workflow.Context, reply queryReply) {
 		wfCtx.deliverQueryReply(reply)
 	})
 	startSignalLoop(ctx, askRequestSignal, func(loopCtx workflow.Context, req askRequest) {
+		wfCtx.beginHandler()
+		defer wfCtx.endHandler()
 		i.handleAskRequest(loopCtx, wfCtx, state, req)
 	})
 	startSignalLoop(ctx, askReplySignal, func(_ workflow.Context, reply askReply) {
@@ -726,6 +848,8 @@ func (i *temporalInstance) startSignalHandlers(ctx workflow.Context, wfCtx *wfCo
 		wfCtx.deliverContinueReply(reply)
 	})
 	startSignalLoop(ctx, tellRequestSignal, func(loopCtx workflow.Context, req tellRequest) {
+		wfCtx.beginHandler()
+		defer wfCtx.endHandler()
 		i.handleTellRequest(loopCtx, wfCtx, state, req)
 	})
 }

@@ -57,6 +57,8 @@ type wfContext struct {
 	snapshotInfo      actors.SnapshotInfo
 	queryCache        map[string]map[string]queryCacheEntry
 	routing           *namespaceRouting
+	handlersInFlight  int
+	handlersIdleCh    workflow.Channel
 }
 
 func (c *wfContext) ActorID() string { return c.ref.ID }
@@ -300,6 +302,40 @@ func (c *wfContext) restoreSnapshotStats(stats snapshotStats) {
 		c.snapshotInfo.LastSnapshotTime = stats.LastSnapshotTime
 	}
 	c.snapshotInfo.CommandsSinceSnapshot = 0
+}
+
+// beginHandler / endHandler bracket every command handler invocation, on
+// whichever coroutine it runs: the command loop's selector callback, the
+// Tell/Ask request loops, Temporal Update handlers, and snapshot replay. The
+// count is what the loop consults before continuing-as-new. Rotating while a
+// handler is in flight abandons it -- its command sits in no channel for
+// drainSignals to capture, and whatever it has written so far is what the
+// snapshot freezes -- so the loop defers the rotation instead.
+//
+// Temporal's own workflow.AllHandlersFinished only sees Update handlers
+// (internally it is `len(runningUpdatesHandles) == 0`), which is why the
+// Tell/Ask coroutines need this counter of our own.
+//
+// All of this is plain workflow-coroutine state: no goroutines, no clock, and
+// the wake-up runs over a workflow.Channel, so replay reproduces it exactly.
+func (c *wfContext) beginHandler() {
+	c.handlersInFlight++
+}
+
+func (c *wfContext) endHandler() {
+	if c.handlersInFlight > 0 {
+		c.handlersInFlight--
+	}
+	if c.handlersInFlight == 0 && c.handlersIdleCh != nil {
+		// Buffered, capacity 1: a wake-up that nobody is waiting for is
+		// dropped rather than blocking the finishing handler.
+		c.handlersIdleCh.SendAsync(struct{}{})
+	}
+}
+
+// handlersRunning reports how many command handlers have not returned yet.
+func (c *wfContext) handlersRunning() int {
+	return c.handlersInFlight
 }
 
 func (c *wfContext) requestStop() {
