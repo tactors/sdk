@@ -1161,10 +1161,6 @@ type stopLoopCommand struct {
 	actors.CommandMsg[struct{}]
 }
 
-type selectorTickCommand struct {
-	actors.CommandMsg[struct{}]
-}
-
 type selectorBenchCommand struct {
 	actors.CommandMsg[struct{}]
 }
