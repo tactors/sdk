@@ -153,7 +153,12 @@ func (t *temporalClientInvoker) InvokeAsk(ctx context.Context, ref actors.Ref, m
 	}
 	if ref.RunID != "" {
 		options.RunID = ref.RunID
-	} else if cached := t.cachedRunID(ref.Workflow); cached != "" {
+	} else if cached := t.cachedRunID(ref.Workflow); cached != "" && !opts.RequireExisting {
+		// A remembered run can be stale -- continue-as-new replaces it -- and a
+		// stale run answers NotFound. That is normally recovered by starting.
+		// A caller that refuses to start would instead report a live actor as
+		// missing, so it addresses the workflow id and lets Temporal resolve
+		// the current run.
 		options.RunID = cached
 	}
 	if payload != nil {
@@ -169,7 +174,7 @@ func (t *temporalClientInvoker) InvokeAsk(ctx context.Context, ref actors.Ref, m
 	options.UpdateID = opts.CorrelationID
 	handle, err := t.client.UpdateWorkflow(ctx, options)
 	if err != nil {
-		retry, handledErr := t.handleUpdateError(ctx, ref, &options, err)
+		retry, handledErr := t.handleUpdateError(ctx, ref, &options, err, opts.RequireExisting)
 		if handledErr != nil {
 			return handledErr
 		}
@@ -187,9 +192,16 @@ func (t *temporalClientInvoker) InvokeAsk(ctx context.Context, ref actors.Ref, m
 	return handle.Get(ctx, resp)
 }
 
-func (t *temporalClientInvoker) handleUpdateError(ctx context.Context, ref actors.Ref, options *client.UpdateWorkflowOptions, err error) (bool, error) {
+func (t *temporalClientInvoker) handleUpdateError(ctx context.Context, ref actors.Ref, options *client.UpdateWorkflowOptions, err error, requireExisting bool) (bool, error) {
 	switch err.(type) {
 	case *serviceerror.NotFound, *temporal.UnknownExternalWorkflowExecutionError:
+		if requireExisting {
+			// The caller asked for an actor that already exists. Refusing here
+			// rather than probing before the update is what makes that free of
+			// a check-then-act window: the same call that would have created
+			// the actor is the one that reports it missing.
+			return false, err
+		}
 		if startErr := t.startWorkflow(ctx, ref); startErr != nil {
 			return false, startErr
 		}

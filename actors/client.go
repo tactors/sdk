@@ -122,6 +122,14 @@ func InvokeQueryNamed[R any](ctx context.Context, ref Ref, method string, payloa
 // AskOptions exposes optional metadata for ask calls.
 type AskOptions struct {
 	CorrelationID string
+	// RequireExisting refuses to bring the target actor into existence. An ask
+	// normally starts the actor when it is not running, which is what makes
+	// the first command on a new instance work; a caller that is acting on an
+	// instance it believes already exists wants the opposite, and wants it
+	// without a check-then-act window. With this set, an ask against an actor
+	// that is not running returns the substrate's not-found error rather than
+	// starting one.
+	RequireExisting bool
 }
 
 // AskOption customizes AskOptions.
@@ -131,6 +139,14 @@ type AskOption func(*AskOptions)
 func WithCorrelationID(id string) AskOption {
 	return func(opts *AskOptions) {
 		opts.CorrelationID = id
+	}
+}
+
+// WithRequireExisting refuses to start the target actor if it is not already
+// running. See AskOptions.RequireExisting.
+func WithRequireExisting() AskOption {
+	return func(opts *AskOptions) {
+		opts.RequireExisting = true
 	}
 }
 
