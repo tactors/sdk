@@ -94,7 +94,7 @@ func TestHandleUpdateErrorNotFound(t *testing.T) {
 	inv := &temporalClientInvoker{client: fake}
 	ctx := context.Background()
 	options := client.UpdateWorkflowOptions{}
-	retry, err := inv.handleUpdateError(ctx, actors.Ref{Workflow: "wf", Kind: "kind"}, &options, &serviceerror.NotFound{})
+	retry, err := inv.handleUpdateError(ctx, actors.Ref{Workflow: "wf", Kind: "kind"}, &options, &serviceerror.NotFound{}, false)
 	require.True(t, retry)
 	require.NoError(t, err)
 	require.Equal(t, 1, fake.executeCount)
@@ -105,7 +105,7 @@ func TestHandleUpdateErrorUnknownExternal(t *testing.T) {
 	inv := &temporalClientInvoker{client: fake}
 	ctx := context.Background()
 	options := client.UpdateWorkflowOptions{}
-	retry, err := inv.handleUpdateError(ctx, actors.Ref{Workflow: "wf", Kind: "kind"}, &options, &temporal.UnknownExternalWorkflowExecutionError{})
+	retry, err := inv.handleUpdateError(ctx, actors.Ref{Workflow: "wf", Kind: "kind"}, &options, &temporal.UnknownExternalWorkflowExecutionError{}, false)
 	require.True(t, retry)
 	require.NoError(t, err)
 	require.Equal(t, 1, fake.executeCount)
@@ -122,7 +122,7 @@ func TestHandleUpdateErrorContinueAsNew(t *testing.T) {
 	inv := &temporalClientInvoker{client: fake}
 	ctx := context.Background()
 	options := client.UpdateWorkflowOptions{}
-	retry, err := inv.handleUpdateError(ctx, actors.Ref{Workflow: "wf", Kind: "kind"}, &options, &serviceerror.WorkflowNotReady{})
+	retry, err := inv.handleUpdateError(ctx, actors.Ref{Workflow: "wf", Kind: "kind"}, &options, &serviceerror.WorkflowNotReady{}, false)
 	require.True(t, retry)
 	require.NoError(t, err)
 	require.Equal(t, "new-run", options.RunID)
@@ -135,7 +135,7 @@ func TestHandleUpdateErrorNonRetryable(t *testing.T) {
 	ctx := context.Background()
 	options := client.UpdateWorkflowOptions{}
 	baseErr := errors.New("boom")
-	retry, err := inv.handleUpdateError(ctx, actors.Ref{Workflow: "wf", Kind: "kind"}, &options, baseErr)
+	retry, err := inv.handleUpdateError(ctx, actors.Ref{Workflow: "wf", Kind: "kind"}, &options, baseErr, false)
 	require.False(t, retry)
 	require.Equal(t, baseErr, err)
 }
@@ -324,4 +324,48 @@ func (f fakeUpdateHandle) UpdateID() string {
 
 func (f fakeUpdateHandle) Get(ctx context.Context, valuePtr interface{}) error {
 	return nil
+}
+
+// An ask that requires an existing actor must report a missing one rather than
+// creating it. This is what lets a caller act on an instance it believes
+// already exists without a check-then-act window: the same call that would
+// have started the workflow is the one that says it is not there.
+func TestHandleUpdateErrorNotFoundRequiringExistingDoesNotStart(t *testing.T) {
+	fake := &fakeTemporalClient{}
+	inv := &temporalClientInvoker{client: fake}
+	ctx := context.Background()
+	options := client.UpdateWorkflowOptions{}
+	notFound := &serviceerror.NotFound{}
+	retry, err := inv.handleUpdateError(ctx, actors.Ref{Workflow: "wf", Kind: "kind"}, &options, notFound, true)
+	require.False(t, retry)
+	require.Equal(t, notFound, err)
+	require.Equal(t, 0, fake.executeCount, "no workflow may be started")
+}
+
+// An ask that refuses to start the actor addresses the workflow id and lets
+// Temporal resolve the current run, rather than the run this invoker happens to
+// remember.
+//
+// A remembered run goes stale when the workflow continues as new, and a stale
+// run answers not-found. That is normally recovered by starting one; a caller
+// that refuses to start would instead report a live actor as missing, which for
+// an HTTP route is a 404 on an instance that is running.
+func TestInvokeAskRequiringExistingIgnoresTheRememberedRun(t *testing.T) {
+	fake := &fakeTemporalClient{}
+	inv := &temporalClientInvoker{client: fake}
+	inv.storeRunID("wf", "a-stale-run")
+	ref := actors.Ref{Workflow: "wf", Kind: "kind"}
+	var out string
+
+	require.NoError(t, inv.InvokeAsk(context.Background(), ref, "Method", nil, &out, actors.AskOptions{RequireExisting: true}))
+	require.Len(t, fake.updateCalls, 1)
+	require.Empty(t, fake.updateCalls[0].RunID, "a run id was pinned, so a continued-as-new actor would read as missing")
+
+	// Without the flag the remembered run is still used, because starting is
+	// what recovers a stale one. The successful ask above replaced what was
+	// remembered, so it is put back.
+	inv.storeRunID("wf", "a-stale-run")
+	require.NoError(t, inv.InvokeAsk(context.Background(), ref, "Method", nil, &out, actors.AskOptions{}))
+	require.Len(t, fake.updateCalls, 2)
+	require.Equal(t, "a-stale-run", fake.updateCalls[1].RunID)
 }
