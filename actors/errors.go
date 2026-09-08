@@ -8,6 +8,13 @@ import (
 var (
 	// ErrStopLoop signals the workflow loop should terminate gracefully.
 	ErrStopLoop = errors.New("actors: stop loop")
+
+	// ErrAskTimeout is returned by AskWithTimeout (and by an ask that runs
+	// into the runtime's default ask timeout) when the deadline elapses
+	// before the target replies. Compare with errors.Is. It is the ask-side
+	// twin of ErrEventTimeout, which lives in events.go next to the event
+	// plumbing it belongs to.
+	ErrAskTimeout = errors.New("actors: ask timed out")
 )
 
 // BusinessError wraps err so runtimes can reply with application errors

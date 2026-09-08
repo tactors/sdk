@@ -539,7 +539,12 @@ func (c *wfContext) queryViaBridge(ref actors.Ref, name string, payload any, id,
 	return future.Get()
 }
 
-func (c *wfContext) askViaBridge(ref actors.Ref, name string, payload any, id, callerNS, targetNS string) (any, error) {
+// askViaBridge routes a cross-namespace ask through an activity. There is no
+// reply signal to wait on here, so the deadline is applied as the activity's
+// own schedule-to-close/start-to-close timeouts -- which Temporal enforces
+// deterministically -- and the resulting timeout error is rewritten to
+// ErrAskTimeout so callers can treat both routes alike.
+func (c *wfContext) askViaBridge(ref actors.Ref, name string, payload any, id, callerNS, targetNS string, deadline askDeadline) (any, error) {
 	req := bridgeAskRequest{
 		Ref:             normalizeWorkflowRef(ref),
 		Method:          name,
@@ -548,8 +553,21 @@ func (c *wfContext) askViaBridge(ref actors.Ref, name string, payload any, id, c
 		CallerNamespace: callerNS,
 		TargetNamespace: targetNS,
 	}
-	future := c.activityWithContext(c.workflowCtx, bridgeInvokeAskActivity, req, actors.ActivityCallOptions{})
-	return future.Get()
+	var opts actors.ActivityCallOptions
+	timeout := deadline.resolve()
+	if timeout > 0 {
+		opts.ScheduleToClose = timeout
+		opts.StartToClose = timeout
+	}
+	future := c.activityWithContext(c.workflowCtx, bridgeInvokeAskActivity, req, opts)
+	result, err := future.Get()
+	if err != nil && timeout > 0 {
+		var timeoutErr *temporal.TimeoutError
+		if errors.As(err, &timeoutErr) {
+			return nil, fmt.Errorf("%w: command %q after %s: %v", actors.ErrAskTimeout, name, timeout, err)
+		}
+	}
+	return result, err
 }
 
 func (c *wfContext) tellViaBridge(ref actors.Ref, name string, payload any, callerNS, targetNS string) error {
@@ -660,19 +678,59 @@ func (c *wfContext) QueryActor(ref actors.Ref, payload any) (any, error) {
 	return reply.Payload, nil
 }
 
+// askDeadline carries the per-call ask timeout through the routing layers.
+// The zero value means "no per-call deadline was given", which is distinct
+// from an explicit zero (which means "no deadline at all"), so AskActor keeps
+// falling back to the process default while AskActorWithTimeout(…, 0) does not.
+type askDeadline struct {
+	set     bool
+	timeout time.Duration
+}
+
+// resolve returns the wait timeout to apply. A non-positive result means the
+// wait is unbounded. It reads no clock, so it is safe to call during replay:
+// an explicit per-call deadline is a pure function of its argument, and the
+// process default is only consulted when the caller gave none.
+func (d askDeadline) resolve() time.Duration {
+	if d.set {
+		if d.timeout <= 0 {
+			return 0
+		}
+		return d.timeout
+	}
+	return askTimeout()
+}
+
+// AskActor sends a command to another actor and waits for the reply, bounded
+// only by the process-wide default (SetDefaultAskTimeout).
 func (c *wfContext) AskActor(ref actors.Ref, payload any) (any, error) {
+	return c.ask(ref, payload, askDeadline{})
+}
+
+// AskActorWithTimeout is AskActor with a deadline for this call alone.
+// timeout <= 0 means no deadline, matching Ctx.WaitForEvent. On expiry the
+// error satisfies errors.Is(err, actors.ErrAskTimeout).
+//
+// The deadline is a workflow timer, not a wall clock, so it replays: the timer
+// is started from the same coroutine that issues the request signal and is
+// cancelled the moment the reply wins the select.
+func (c *wfContext) AskActorWithTimeout(ref actors.Ref, payload any, timeout time.Duration) (any, error) {
+	return c.ask(ref, payload, askDeadline{set: true, timeout: timeout})
+}
+
+func (c *wfContext) ask(ref actors.Ref, payload any, deadline askDeadline) (any, error) {
 	if currentAskRoutingMode() == AskRouteUpdate {
-		result, err := c.askViaUpdate(ref, payload)
+		result, err := c.askViaUpdate(ref, payload, deadline)
 		if !errors.Is(err, errAskUpdateUnsupported) {
 			return result, err
 		}
 	}
-	return c.askViaSignal(ref, payload)
+	return c.askViaSignal(ref, payload, deadline)
 }
 
 var errAskUpdateUnsupported = errors.New("actors: ask update routing not supported")
 
-func (c *wfContext) askViaSignal(ref actors.Ref, payload any) (any, error) {
+func (c *wfContext) askViaSignal(ref actors.Ref, payload any, deadline askDeadline) (any, error) {
 	if ref.ID == "" {
 		return nil, fmt.Errorf("actors: target ref ID is empty")
 	}
@@ -742,7 +800,7 @@ func (c *wfContext) askViaSignal(ref actors.Ref, payload any) (any, error) {
 	emitAskStart(c.workflowCtx, askEvent)
 	if crossNS {
 		c.removeAskWaiter(id)
-		return c.askViaBridge(ref, name, payload, id, callerNS, targetNS)
+		return c.askViaBridge(ref, name, payload, id, callerNS, targetNS, deadline)
 	}
 	meta := c.newOutgoingMetadata("ask", id)
 	c.applySignalDeadline(desc, name, &meta)
@@ -751,14 +809,20 @@ func (c *wfContext) askViaSignal(ref actors.Ref, payload any) (any, error) {
 		Command:       name,
 		Payload:       payload,
 		ReplyWorkflow: c.targetWorkflowID(),
-		ReplySignal:   askReplySignal,
-		Envelope:      meta,
+		// Pin the reply to the run that issued the request. Waiter ids
+		// ("<actorID>-ask-<n>") restart at 1 after a continue-as-new, so an
+		// unpinned reply for run N's ask #1 would be delivered to run N+1 and
+		// handed to *its* ask #1. Named from the same ref as ReplyWorkflow so
+		// the two can never disagree.
+		ReplyRunID:  c.ref.RunID,
+		ReplySignal: askReplySignal,
+		Envelope:    meta,
 	}
 	if err := c.signalWorkflow(ref, askRequestSignal, req); err != nil {
 		c.removeAskWaiter(id)
 		return nil, err
 	}
-	reply, err := c.waitForAskReply(ch, name, id)
+	reply, err := c.waitForAskReply(ch, name, id, deadline.resolve())
 	if err != nil {
 		return nil, err
 	}
@@ -768,7 +832,13 @@ func (c *wfContext) askViaSignal(ref actors.Ref, payload any) (any, error) {
 	return reply.Payload, nil
 }
 
-func (c *wfContext) askViaUpdate(ref actors.Ref, payload any) (any, error) {
+// askViaUpdate is the placeholder for AskRouteUpdate (future/update routing).
+// It is not implemented: it always reports errAskUpdateUnsupported, so with
+// SetAskRoutingMode(AskRouteUpdate) every ask still runs through askViaSignal
+// and is bounded there. The deadline is threaded in anyway so that whoever
+// implements this route has to decide what to do with it rather than
+// discovering later that the timeout was silently dropped.
+func (c *wfContext) askViaUpdate(ref actors.Ref, payload any, deadline askDeadline) (any, error) {
 	return nil, errAskUpdateUnsupported
 }
 
@@ -886,7 +956,11 @@ func (c *wfContext) registerAskWaiter() (string, workflow.Channel, error) {
 	}
 	c.askSeq++
 	id := fmt.Sprintf("%s-ask-%d", c.ref.ID, c.askSeq)
-	ch := workflow.NewChannel(c.workflowCtx)
+	// Buffered by one: at most one reply is ever delivered per id (the waiter
+	// entry is taken by whoever delivers it), so the send in deliverAskReply
+	// can never block. An unbuffered channel would strand the sender forever
+	// if the ask timed out in the same workflow task as the reply arrival.
+	ch := workflow.NewBufferedChannel(c.workflowCtx, 1)
 	c.askWaiters[id] = ch
 	return id, ch, nil
 }
@@ -900,14 +974,21 @@ func (c *wfContext) removeAskWaiter(id string) workflow.Channel {
 	return ch
 }
 
+// deliverAskReply hands a reply to the ask that is waiting for it, if any.
+//
+// A late reply -- one whose ask already timed out, was cancelled, or belongs to
+// a previous run -- finds no waiter and is dropped here. It cannot be
+// mis-delivered to a later ask: waiter ids are monotonic within a run
+// (askSeq never rewinds) and replies are pinned to the issuing run id, so the
+// id in a stale reply can never name a live waiter.
 func (c *wfContext) deliverAskReply(reply askReply) {
 	ch := c.removeAskWaiter(reply.ID)
 	if ch == nil {
 		return
 	}
-	workflow.Go(c.workflowCtx, func(ctx workflow.Context) {
-		ch.Send(ctx, reply)
-	})
+	// The channel is buffered, so this never blocks the reply signal loop and
+	// needs no coroutine of its own.
+	ch.Send(c.workflowCtx, reply)
 }
 
 func (c *wfContext) registerContinueWaiter() (string, workflow.Channel, error) {
@@ -977,33 +1058,57 @@ func (c *wfContext) waitForQueryReply(ch workflow.Channel, name, id string) (que
 	return reply, nil
 }
 
-func (c *wfContext) waitForAskReply(ch workflow.Channel, name, id string) (askReply, error) {
-	timeout := askTimeout()
+// waitForAskReply blocks the calling coroutine until the reply signal arrives,
+// the deadline elapses, or the workflow is cancelled. timeout <= 0 waits
+// without a deadline. It is modelled on WaitForEvent: a workflow timer plus a
+// selector, with the timer cancelled as soon as the reply wins so replay sees
+// StartTimer followed by CancelTimer and nothing else.
+func (c *wfContext) waitForAskReply(ch workflow.Channel, name, id string, timeout time.Duration) (askReply, error) {
+	ctx := c.workflowCtx
 	var (
 		timerCtx workflow.Context
 		cancel   workflow.CancelFunc
 		timer    workflow.Future
 	)
 	if timeout > 0 {
-		timerCtx, cancel = workflow.WithCancel(c.workflowCtx)
+		timerCtx, cancel = workflow.WithCancel(ctx)
 		timer = workflow.NewTimer(timerCtx, timeout)
 		defer cancel()
 	}
-	selector := workflow.NewSelector(c.workflowCtx)
+	selector := workflow.NewSelector(ctx)
 	var reply askReply
 	var err error
 	selector.AddReceive(ch, func(rc workflow.ReceiveChannel, more bool) {
-		rc.Receive(c.workflowCtx, &reply)
+		rc.Receive(ctx, &reply)
 		if cancel != nil {
 			cancel()
 		}
 	})
 	if timer != nil {
-		selector.AddFuture(timer, func(workflow.Future) {
-			err = fmt.Errorf("actors: ask %s timed out waiting for reply", name)
+		selector.AddFuture(timer, func(f workflow.Future) {
+			if terr := f.Get(ctx, nil); terr != nil {
+				// The timer was cancelled with its parent context, i.e. the
+				// handler was cancelled. Report that, not a bogus timeout.
+				err = terr
+				return
+			}
+			err = fmt.Errorf("%w: command %q after %s", actors.ErrAskTimeout, name, timeout)
 		})
 	}
-	selector.Select(c.workflowCtx)
+	if done := ctx.Done(); done != nil {
+		// Without this an ask with no deadline (timeout <= 0) would ignore
+		// workflow cancellation and never return.
+		selector.AddReceive(done, func(workflow.ReceiveChannel, bool) {
+			err = ctx.Err()
+			if err == nil {
+				err = temporal.NewCanceledError("actors: ask cancelled")
+			}
+		})
+	}
+	selector.Select(ctx)
+	// Whoever loses the race must not leave a waiter behind: the entry is what
+	// makes a late reply addressable, and dropping it here is what guarantees
+	// the reply is discarded instead of surfacing in a later ask.
 	c.removeAskWaiter(id)
 	if err != nil {
 		return askReply{}, err

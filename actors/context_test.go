@@ -20,6 +20,7 @@ type stubCtx struct {
 	queryErr        error
 	askResult       any
 	askErr          error
+	askedTimeout    time.Duration
 	searchAttrs     map[string]any
 	activityValue   any
 	activityErr     error
@@ -90,6 +91,11 @@ func (s *stubCtx) AskActor(ref actors.Ref, payload any) (any, error) {
 	s.sentRef = ref
 	s.sentPayload = payload
 	return s.askResult, s.askErr
+}
+
+func (s *stubCtx) AskActorWithTimeout(ref actors.Ref, payload any, timeout time.Duration) (any, error) {
+	s.askedTimeout = timeout
+	return s.AskActor(ref, payload)
 }
 
 func (s *stubCtx) Effect(key string, fn actors.EffectFunc, opts ...actors.EffectOption) (any, error) {
@@ -311,6 +317,42 @@ func TestAskHelper(t *testing.T) {
 	}
 	if resp.Result != "ASK" {
 		t.Fatalf("expected ASK, got %s", resp.Result)
+	}
+}
+
+// unboundedOnlyCtx implements AskActor but not AskActorWithTimeout, i.e. a
+// runtime that can ask but cannot bound the wait.
+type unboundedOnlyCtx struct {
+	actors.Ctx
+}
+
+func (unboundedOnlyCtx) AskActor(actors.Ref, any) (any, error) { return nil, nil }
+
+func TestAskWithTimeoutHelper(t *testing.T) {
+	ctx := &stubCtx{askResult: map[string]any{"Result": "ASK"}}
+	resp, err := actors.AskWithTimeout[sampleCommand, sampleResponse](ctx, actors.Ref{Kind: "child", ID: "child-1"}, sampleCommand{Value: "ping"}, 7*time.Second)
+	if err != nil {
+		t.Fatalf("AskWithTimeout: %v", err)
+	}
+	if resp.Result != "ASK" {
+		t.Fatalf("expected ASK, got %s", resp.Result)
+	}
+	if ctx.askedTimeout != 7*time.Second {
+		t.Fatalf("timeout not forwarded to the runtime: %s", ctx.askedTimeout)
+	}
+	if ctx.sentRef.ID != "child-1" {
+		t.Fatalf("unexpected ref in ask: %+v", ctx.sentRef)
+	}
+}
+
+// A runtime that only knows how to make an unbounded ask must say so rather
+// than quietly dropping the caller's deadline.
+func TestAskWithTimeoutUnsupportedRuntime(t *testing.T) {
+	if _, err := actors.AskWithTimeout[sampleCommand, sampleResponse](nil, actors.Ref{Kind: "child", ID: "child-1"}, sampleCommand{}, time.Second); !errors.Is(err, actors.ErrUnsupported) {
+		t.Fatalf("expected ErrUnsupported for a nil ctx, got %v", err)
+	}
+	if _, err := actors.AskWithTimeout[sampleCommand, sampleResponse](unboundedOnlyCtx{}, actors.Ref{Kind: "child", ID: "child-1"}, sampleCommand{}, time.Second); !errors.Is(err, actors.ErrUnsupported) {
+		t.Fatalf("expected ErrUnsupported when the runtime cannot bound an ask, got %v", err)
 	}
 }
 

@@ -319,7 +319,10 @@ func QueryActor[Req TypedQueryMessage[Resp], Resp any](ctx Ctx, ref Ref, req Req
 	return zero, ErrUnsupported
 }
 
-// Ask sends a typed command to another actor instance and waits for the response.
+// Ask sends a typed command to another actor instance and waits for the
+// response. The wait is bounded only by the runtime's process-wide default
+// (runtime.SetDefaultAskTimeout), which can be disabled; use AskWithTimeout to
+// give one call its own deadline.
 func Ask[Req TypedCommandMessage[Resp], Resp any](ctx Ctx, ref Ref, req Req) (Resp, error) {
 	var zero Resp
 	if ctx == nil {
@@ -335,6 +338,32 @@ func Ask[Req TypedCommandMessage[Resp], Resp any](ctx Ctx, ref Ref, req Req) (Re
 		return decodeTypedResult[Resp](val)
 	}
 	return zero, ErrUnsupported
+}
+
+// AskWithTimeout is Ask with a per-call deadline, mirroring the (name, timeout)
+// shape of Ctx.WaitForEvent: timeout <= 0 means no deadline at all, and
+// overrides the runtime default rather than being clamped by it. On expiry the
+// error satisfies errors.Is(err, ErrAskTimeout) and the reply that may still
+// arrive afterwards is discarded by the runtime, never handed to a later ask.
+//
+// Runtimes that cannot bound an ask return ErrUnsupported: the timeout is
+// never silently dropped by falling back to an unbounded Ask.
+func AskWithTimeout[Req TypedCommandMessage[Resp], Resp any](ctx Ctx, ref Ref, req Req, timeout time.Duration) (Resp, error) {
+	var zero Resp
+	if ctx == nil {
+		return zero, ErrUnsupported
+	}
+	invoker, ok := ctx.(interface {
+		AskActorWithTimeout(ref Ref, payload any, timeout time.Duration) (any, error)
+	})
+	if !ok {
+		return zero, ErrUnsupported
+	}
+	val, err := invoker.AskActorWithTimeout(ref, req, timeout)
+	if err != nil {
+		return zero, err
+	}
+	return decodeTypedResult[Resp](val)
 }
 
 // ContinueAsNewOptions configure how a remote continue-as-new request behaves.
